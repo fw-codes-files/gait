@@ -34,7 +34,7 @@ class utils(object):
         return joints
 
     @classmethod
-    def midFilter(cls, p0, p1, p2):
+    def midFilter(cls, p0, p1, p2):# 中值观察
         x = np.array([p0[:, 0], p1[:, 0], p2[:, 0]])
         y = np.array([p0[:, 1], p1[:, 1], p2[:, 1]])
         z = np.array([p0[:, 2], p1[:, 2], p2[:, 2]])
@@ -44,7 +44,7 @@ class utils(object):
         return np.hstack((x, y, z)).reshape([-1, 3])
 
     @classmethod
-    def bonesLengtg(cls, joints_ak: np):
+    def bonesLengtg(cls, joints_ak: np):# 均值骨长
         # 每32行是一帧，先不考虑五官
         bl = np.zeros([26, 1])
         frame_num = joints_ak.shape[0] / 32
@@ -115,7 +115,7 @@ class utils(object):
         return bld
 
     @classmethod
-    def distriDistance(cls, bu0: np, bu1: np, bld: float):
+    def distriDistance(cls, bu0: np, bu1: np, bld: float):# 骨长样本
         # bu都是(36,3),每个点对于相邻36个散点都有距离
         """
         :param bu0:
@@ -130,17 +130,23 @@ class utils(object):
         bu0 = bu0[:,None,:]
         bu1 = bu1[None,:,:]
         b_distance_score = np.linalg.norm(bu0-bu1,axis=-1)
-        b_distance_score -= bld
-        return 1 - abs(b_distance_score) / sum(sum(abs(b_distance_score)))
+        # b_distance_score -= bld
+        # if bld == 280.10292586429114:
+        # return 1 - abs(b_distance_score) / sum(sum(abs(b_distance_score)))
+        return 1 - abs(b_distance_score-bld)/abs(b_distance_score - bld)**2/(36**2-1)
 
     @classmethod
-    def threeAKs(cls, joint_ak_0: np, joint_ak_1: np, joint_ak_2: np, joint_set_bar: np):
+    def threeAKs(cls, joint_ak_0: np, joint_ak_1: np, joint_ak_2: np, joint_set_bar: np):# 三点观察
         joint_ak_0 = joint_ak_0[None,:,:]
         joint_ak_1 = joint_ak_1[None,:,:]
         joint_ak_2 = joint_ak_2[None,:,:]
         js = np.linalg.norm((joint_set_bar-joint_ak_0),axis=-1)+np.linalg.norm((joint_set_bar-joint_ak_1),axis=-1)+np.linalg.norm((joint_set_bar-joint_ak_2),axis=-1)
-        return 1 - js / sum(sum(js))
-
+        # js是所有样本
+        # 样本数据标准化
+        js_bar = np.mean(js)
+        std = np.var(js,ddof=1)
+        # return 1 - js / sum(sum(js))
+        return 1 - abs(js-js_bar)/std
     @classmethod
     def dissimilation(cls, d:int, c:int,j1:np, j2:np):
         x_times = np.random.random(32)
@@ -174,7 +180,7 @@ class utils(object):
                 j2[:, 2] *= z_times
         return j1,j2
     @classmethod
-    def bonesLengthMid(cls,joints_ak: np):
+    def bonesLengthMid(cls,joints_ak: np):# 中值骨长
         # 每32行是一帧，先不考虑五官
         frame_num = int(joints_ak.shape[0] / 32)
         bl = np.zeros([frame_num, 20, 1])
@@ -441,7 +447,7 @@ class DataProcess(object):
         bl2 = utils.bonesLengthMid(joints_ak_2)
         bld = utils.dictAtMidValue(bl0, bl1, bl2)
         # ak估计做观察值
-        for ff in range(100):
+        for ff in range(0,100):
             joints_score = utils.threeAKs(joints_ak_0[ff * 32:(ff + 1) * 32], joints_ak_1[ff * 32:(ff + 1) * 32],
                                           joints_ak_2[ff * 32:(ff + 1) * 32],
                                           joint_bar_set[:, ff * 32:(ff + 1) * 32, :])
@@ -523,7 +529,7 @@ class DataProcess(object):
 
             # 5-6
             f32 = factor([K4ABT_JOINT_NAMES[6]], joints_score[:, 6])
-            distance56 = utils.distriDistance(joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 4, :], joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 5, :], bld['5-6'])
+            distance56 = utils.distriDistance(joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 5, :], joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 6, :], bld['5-6'])
             f16 = factor([K4ABT_JOINT_NAMES[5], K4ABT_JOINT_NAMES[6]], distance56)
 
             # 6-7
@@ -589,77 +595,77 @@ class DataProcess(object):
                 idx = np.argmax(score_array)
                 answer.append(joint_bar_set[:, ff * 32:(ff + 1) * 32, :][idx, jidex, :])
             bpStep1 = np.array(answer)
-        # print(time.time()-s)
-            '''画图 start'''
-            line = [[1, 0], [2, 1], [3, 2], [4, 2], [5, 4], [6, 5], [7, 6], [8, 7], [9, 8], [10, 7], [11, 2], [12, 11],
-                    [13, 12], [14, 13], [15, 14], [16, 15], [17, 14], [18, 0], [19, 18], [20, 19], [21, 20], [22, 0],
-                    [23, 22], [24, 23], [25, 24], [26, 3], [27, 26], [28, 26], [29, 26], [30, 26], [31, 26]]
-            cl0 = [[1, 0, 0] for i in range(len(line))]
-            cl1 = [[0, 1, 0] for j in range(len(line))]
-            cl2 = [[0, 0, 1] for k in range(len(line))]
-            cs0 = np.zeros([32, 3])
-            cs0[:, 0] = 1  # red
-            cs1 = np.zeros([32, 3])
-            cs1[:, 1] = 1  # green
-            cs2 = np.zeros([32, 3])
-            cs2[:, 2] = 1  # blue
-            line_bp = [[1, 0], [2, 1], [3, 2], [4, 2], [5, 4], [6, 5], [7, 6], [8, 2], [8, 9],
-                                  [9, 10], [10, 11], [12, 0], [12, 13], [13, 14], [14, 15], [16, 0],
-                                  [16, 17], [17, 18], [18, 19], [20, 3]]
-            cl_bp = [[0, 0, 0] for l in range(len(line_bp))]
-            test0_pcd = o3d.geometry.PointCloud()
-            test0_pcd.points = o3d.utility.Vector3dVector(joints_ak_0[ff * 32:(ff + 1) * 32])  # 定义点云坐标位置
-            test0_pcd.colors = o3d.utility.Vector3dVector(cs0)  # 定义点云的颜色
-            test0_pcd.transform([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
-            lines0_pcd = o3d.geometry.LineSet()
-            lines0_pcd.lines = o3d.utility.Vector2iVector(line)
-            lines0_pcd.colors = o3d.utility.Vector3dVector(cl0)  # 线条颜色
-            lines0_pcd.points = o3d.utility.Vector3dVector(joints_ak_0[ff * 32:(ff + 1) * 32])
-            lines0_pcd.transform([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
-
-            test1_pcd = o3d.geometry.PointCloud()
-            test1_pcd.points = o3d.utility.Vector3dVector(joints_ak_1[ff * 32:(ff + 1) * 32])  # 定义点云坐标位置
-            test1_pcd.colors = o3d.utility.Vector3dVector(cs1)  # 定义点云的颜色
-            test1_pcd.transform([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
-            lines1_pcd = o3d.geometry.LineSet()
-            lines1_pcd.lines = o3d.utility.Vector2iVector(line)
-            lines1_pcd.colors = o3d.utility.Vector3dVector(cl1)  # 线条颜色
-            lines1_pcd.points = o3d.utility.Vector3dVector(joints_ak_1[ff * 32:(ff + 1) * 32])
-            lines1_pcd.transform([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
-
-            test2_pcd = o3d.geometry.PointCloud()
-            test2_pcd.points = o3d.utility.Vector3dVector(joints_ak_2[ff * 32:(ff + 1) * 32])  # 定义点云坐标位置
-            test2_pcd.colors = o3d.utility.Vector3dVector(cs2)  # 定义点云的颜色
-            test2_pcd.transform([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
-            lines2_pcd = o3d.geometry.LineSet()
-            lines2_pcd.lines = o3d.utility.Vector2iVector(line)
-            lines2_pcd.colors = o3d.utility.Vector3dVector(cl2)  # 线条颜色
-            lines2_pcd.points = o3d.utility.Vector3dVector(joints_ak_2[ff * 32:(ff + 1) * 32])
-            lines2_pcd.transform([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
-
-            bp_pcd = o3d.geometry.LineSet()
-            bp_pcd.lines = o3d.utility.Vector2iVector(line_bp)
-            bp_pcd.colors = o3d.utility.Vector3dVector(cl_bp)  # 线条颜色
-            bp_pcd.points = o3d.utility.Vector3dVector(bpStep1)
-            bpp_pcd = o3d.geometry.PointCloud()
-            bpp_pcd.points = o3d.utility.Vector3dVector(bpStep1)
-            bpp_pcd.colors = o3d.utility.Vector3dVector(cl_bp)
-            bp_pcd.transform([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
-            bpp_pcd.transform([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
-            o3d.visualization.draw_geometries(
-                [bp_pcd, bpp_pcd, test0_pcd, lines0_pcd,test1_pcd, lines1_pcd,test2_pcd, lines2_pcd],
-                window_name=f"BP joints points {ff}")
-            '''画图end 头没有画 '''
-
-            bg = cv2.imread(f'./data/fw/image0/image{ff}.bmp')
-            in_param = np.loadtxt('./param/0_rgb_in.txt')
-            uv1 = np.dot(in_param, bpStep1.T) / bpStep1.T[2]
-            for i in range(uv1.shape[1]):
-                u = int(uv1[0, i])
-                v = int(uv1[1, i])
-                cv2.circle(bg, (u, v), 2, (0, 255, 0))
-            cv2.imshow(f'{ff}', bg)
-            cv2.waitKey(0)
+        print(time.time()-s)
+            # '''画图 start'''
+            # line = [[1, 0], [2, 1], [3, 2], [4, 2], [5, 4], [6, 5], [7, 6], [8, 7], [9, 8], [10, 7], [11, 2], [12, 11],
+            #         [13, 12], [14, 13], [15, 14], [16, 15], [17, 14], [18, 0], [19, 18], [20, 19], [21, 20], [22, 0],
+            #         [23, 22], [24, 23], [25, 24], [26, 3], [27, 26], [28, 26], [29, 26], [30, 26], [31, 26]]
+            # cl0 = [[1, 0, 0] for i in range(len(line))]
+            # cl1 = [[0, 1, 0] for j in range(len(line))]
+            # cl2 = [[0, 0, 1] for k in range(len(line))]
+            # cs0 = np.zeros([32, 3])
+            # cs0[:, 0] = 1  # red
+            # cs1 = np.zeros([32, 3])
+            # cs1[:, 1] = 1  # green
+            # cs2 = np.zeros([32, 3])
+            # cs2[:, 2] = 1  # blue
+            # line_bp = [[1, 0], [2, 1], [3, 2], [4, 2], [5, 4], [6, 5], [7, 6], [8, 2], [8, 9],
+            #                       [9, 10], [10, 11], [12, 0], [12, 13], [13, 14], [14, 15], [16, 0],
+            #                       [16, 17], [17, 18], [18, 19], [20, 3]]
+            # cl_bp = [[0, 0, 0] for l in range(len(line_bp))]
+            # test0_pcd = o3d.geometry.PointCloud()
+            # test0_pcd.points = o3d.utility.Vector3dVector(joints_ak_0[ff * 32:(ff + 1) * 32])  # 定义点云坐标位置
+            # test0_pcd.colors = o3d.utility.Vector3dVector(cs0)  # 定义点云的颜色
+            # test0_pcd.transform([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
+            # lines0_pcd = o3d.geometry.LineSet()
+            # lines0_pcd.lines = o3d.utility.Vector2iVector(line)
+            # lines0_pcd.colors = o3d.utility.Vector3dVector(cl0)  # 线条颜色
+            # lines0_pcd.points = o3d.utility.Vector3dVector(joints_ak_0[ff * 32:(ff + 1) * 32])
+            # lines0_pcd.transform([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
+            #
+            # test1_pcd = o3d.geometry.PointCloud()
+            # test1_pcd.points = o3d.utility.Vector3dVector(joints_ak_1[ff * 32:(ff + 1) * 32])  # 定义点云坐标位置
+            # test1_pcd.colors = o3d.utility.Vector3dVector(cs1)  # 定义点云的颜色
+            # test1_pcd.transform([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
+            # lines1_pcd = o3d.geometry.LineSet()
+            # lines1_pcd.lines = o3d.utility.Vector2iVector(line)
+            # lines1_pcd.colors = o3d.utility.Vector3dVector(cl1)  # 线条颜色
+            # lines1_pcd.points = o3d.utility.Vector3dVector(joints_ak_1[ff * 32:(ff + 1) * 32])
+            # lines1_pcd.transform([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
+            #
+            # test2_pcd = o3d.geometry.PointCloud()
+            # test2_pcd.points = o3d.utility.Vector3dVector(joints_ak_2[ff * 32:(ff + 1) * 32])  # 定义点云坐标位置
+            # test2_pcd.colors = o3d.utility.Vector3dVector(cs2)  # 定义点云的颜色
+            # test2_pcd.transform([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
+            # lines2_pcd = o3d.geometry.LineSet()
+            # lines2_pcd.lines = o3d.utility.Vector2iVector(line)
+            # lines2_pcd.colors = o3d.utility.Vector3dVector(cl2)  # 线条颜色
+            # lines2_pcd.points = o3d.utility.Vector3dVector(joints_ak_2[ff * 32:(ff + 1) * 32])
+            # lines2_pcd.transform([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
+            #
+            # bp_pcd = o3d.geometry.LineSet()
+            # bp_pcd.lines = o3d.utility.Vector2iVector(line_bp)
+            # bp_pcd.colors = o3d.utility.Vector3dVector(cl_bp)  # 线条颜色
+            # bp_pcd.points = o3d.utility.Vector3dVector(bpStep1)
+            # bpp_pcd = o3d.geometry.PointCloud()
+            # bpp_pcd.points = o3d.utility.Vector3dVector(bpStep1)
+            # bpp_pcd.colors = o3d.utility.Vector3dVector(cl_bp)
+            # bp_pcd.transform([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
+            # bpp_pcd.transform([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
+            # o3d.visualization.draw_geometries(
+            #     [bp_pcd, bpp_pcd, test0_pcd, lines0_pcd,test1_pcd, lines1_pcd,test2_pcd, lines2_pcd],
+            #     window_name=f"BP joints points {ff}")
+            # '''画图end 头没有画 '''
+            #
+            # bg = cv2.imread(f'./data/fw/image0/image{ff}.bmp')
+            # in_param = np.loadtxt('./param/0_rgb_in.txt')
+            # uv1 = np.dot(in_param, bpStep1.T) / bpStep1.T[2]
+            # for i in range(uv1.shape[1]):
+            #     u = int(uv1[0, i])
+            #     v = int(uv1[1, i])
+            #     cv2.circle(bg, (u, v), 2, (0, 255, 0))
+            # cv2.imshow(f'{ff}', bg)
+            # cv2.waitKey(0)
     @classmethod
     def verifyBP(cls, frame_num: int):
         from dataStructure import belief_propagation, string2factor_graph, factor
