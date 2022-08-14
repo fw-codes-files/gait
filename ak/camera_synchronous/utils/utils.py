@@ -14,6 +14,6 @@ def default_capture_process(capture: pykinect.Capture, color_image_object: pykin
         Tuple[bool, Tuple[Any]]: 第一个返回值表示是否成功, 第二个返回值表示成功的数据
     """    
     color_ret, color_image = color_image_object.to_numpy()
-    color_skeleton = bodyframe.draw_bodies(color_image, pykinect.K4A_CALIBRATION_TYPE_COLOR)
+    color_skeleton = bodyframe.draw_bodies(color_image.copy(), pykinect.K4A_CALIBRATION_TYPE_COLOR)
     joints = bodyframe.get_body()
     return color_ret, (timestamp_usec, color_image,joints, color_skeleton)

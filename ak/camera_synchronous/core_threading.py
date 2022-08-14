@@ -13,7 +13,7 @@ import os
 master_default_configuration = pykinect.Configuration()
 master_default_configuration.wired_sync_mode = pykinect.K4A_WIRED_SYNC_MODE_MASTER
 master_default_configuration.color_resolution = pykinect.K4A_COLOR_RESOLUTION_720P
-master_default_configuration.depth_mode = pykinect.K4A_DEPTH_MODE_NFOV_UNBINNED
+master_default_configuration.depth_mode = pykinect.K4A_DEPTH_MODE_WFOV_2X2BINNED
 master_default_configuration.synchronized_images_only = True
 master_default_configuration.color_format = pykinect.K4A_IMAGE_FORMAT_COLOR_BGRA32
 # master_default_configuration.camera_fps = pykinect.k4a._k4a.K4A_FRAMES_PER_SECOND_15
@@ -22,7 +22,7 @@ master_default_configuration.color_format = pykinect.K4A_IMAGE_FORMAT_COLOR_BGRA
 subordinate_default_configuration = pykinect.Configuration()
 subordinate_default_configuration.wired_sync_mode = pykinect.K4A_WIRED_SYNC_MODE_SUBORDINATE
 subordinate_default_configuration.color_resolution = pykinect.K4A_COLOR_RESOLUTION_720P
-subordinate_default_configuration.depth_mode = pykinect.K4A_DEPTH_MODE_NFOV_UNBINNED
+subordinate_default_configuration.depth_mode = pykinect.K4A_DEPTH_MODE_WFOV_2X2BINNED
 subordinate_default_configuration.synchronized_images_only = True
 subordinate_default_configuration.color_format = pykinect.K4A_IMAGE_FORMAT_COLOR_BGRA32
 
@@ -122,7 +122,7 @@ class MulDeviceSynCapture(object):
     def __init__(self, master_device_id: int = 0, subordinate_device_ids: Union[int, List[int]] = 1,
                  master_config: pykinect.Configuration = master_default_configuration,
                  subordinate_config: pykinect.Configuration = subordinate_default_configuration, synmaxsize: int = 10,
-                 capmaxsize: int = 10, max_dist: float = 1e-2,
+                 capmaxsize: int = 10, max_dist: float = 4e-2,
                  capture_process: Callable = default_capture_process) -> None:
         """多相机同步捕获
 

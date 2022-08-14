@@ -1,4 +1,5 @@
 import time
+
 K4ABT_JOINT_NAMES = ["pelvis", "spine - navel", "spine - chest", "neck", "left clavicle", "left shoulder", "left elbow",
                      "left wrist", "left hand", "left handtip", "left thumb", "right clavicle", "right shoulder",
                      "right elbow",
@@ -12,29 +13,71 @@ sub2 = 2
 import numpy as np
 import pykinect_azure as pykinect
 
-
 class utils(object):
     def __init__(self):
         pass
 
     @classmethod
-    def sub2MasterRT(cls, ak_id, joints):
-        if ak_id == sub1:
-            r = np.array([0.9716459085814197, -0.008863263283334227, -0.23627456676705091, 0.0037945095563309355,
-                          0.9997529893227077, -0.02189890493921318, 0.23641030018637987, 0.020381435285084383,
-                          0.9714395334046815]).reshape([3, 3])
+    def calculateRTandSave(cls):  # 关节点估计是在depth坐标系下，从相机需要进行两次rt计算
+        # 同步相机拍摄标定
+        from ak.camera_synchronous.core_threading import MulDeviceSynCapture
+        import cv2
+        from tqdm import trange
+        from flyingRT import compute_relative_rt
+        mf = MulDeviceSynCapture(0,[1,2])
+        rgb0,rgb1,rgb2 = [],[],[]
+        for i in trange(100):
+            ret = mf.get()
+            rgb0.append(ret[0][1])
+            rgb1.append(ret[1][1])
+            rgb2.append(ret[2][1])
+        mf.close()
+        for j in trange(len(rgb0)):
+            cv2.imwrite(f'./data/rt/master/{j}.jpg',rgb0[j])
+            cv2.imwrite(f'./data/rt/sub1/{j}.jpg',rgb1[j])
+            cv2.imwrite(f'./data/rt/sub2/{j}.jpg',rgb2[j])
+        print('标定图像已保存完毕！')
+        # 得到rgb之间rt
+        masterIn = np.loadtxt('./param/0_rgb_in.txt')
+        sub1In = np.loadtxt('./param/1_rgb_in.txt')
+        sub2In = np.loadtxt('./param/2_rgb_in.txt')
+        masterAb = np.loadtxt('./param/0_rgb_Ab.txt')
+        sub1Ab = np.loadtxt('./param/1_rgb_Ab.txt')
+        sub2Ab = np.loadtxt('./param/2_rgb_Ab.txt')
+        image_dir_list = [
+            ('./data/rt/sub1/', './data/rt/master/'),('./data/rt/sub2/', './data/rt/master/')
+        ]
+        dist = {
+            './data/rt/master/': masterAb,
+            './data/rt/sub1/': sub1Ab,
+            './data/rt/sub2/': sub2Ab
+        }
+        mtx = {
+            './data/rt/master/': masterIn,
+            './data/rt/sub1/': sub1In,
+            './data/rt/sub2/': sub2In
+        }
+        ret = compute_relative_rt(image_dir_list, calibrate_termination_eps=1e-3, distCoeffs=dist, cameraMatrix=mtx,
+                                  unit=50, x_num=11, y_num=11)  # 计算从到主相机的rt
+        print(ret)
+        rgbrt10 = ret[0][0]
+        rgbrt20 = ret[1][0]
+        np.savetxt('./param/1_0_abt_Rt.txt',rgbrt10)
+        np.savetxt('./param/2_0_abt_Rt.txt',rgbrt20)
+        # 读取单个ak的外参
+        # dep→rgb→rgb转换
+        # 存储，下面的函数读取计算用
+        pass
 
-            t = np.array([429.1234786125495, -37.135246339367896, 182.34116001319433]).reshape(1, 3)
-        elif ak_id == sub2:
-            r = np.array(
-                [0.960294354896268, 0.025595421146279804, 0.27781221422159447, -0.01871431897730644, 0.9994495506342523,
-                 -0.027392882327477473, -0.27836042502406144, 0.021106163870679703, 0.9602447623533737]).reshape([3, 3])
-            t = np.array([-555.8313577789826, -32.22200112504963, 122.8330270541916]).reshape(1, 3)
+    @classmethod
+    def sub2MasterRT(cls,joints,Rt):
+        r = Rt[:3,:3].reshape([3, 3])
+        t = Rt[:3,3].reshape(1, 3)
         joints = np.dot(joints, r.T) + t
         return joints
 
     @classmethod
-    def midFilter(cls, p0, p1, p2):# 中值观察
+    def midFilter(cls, p0, p1, p2):  # 中值观察
         x = np.array([p0[:, 0], p1[:, 0], p2[:, 0]])
         y = np.array([p0[:, 1], p1[:, 1], p2[:, 1]])
         z = np.array([p0[:, 2], p1[:, 2], p2[:, 2]])
@@ -44,7 +87,7 @@ class utils(object):
         return np.hstack((x, y, z)).reshape([-1, 3])
 
     @classmethod
-    def bonesLengtg(cls, joints_ak: np):# 均值骨长
+    def bonesLengtg(cls, joints_ak: np):  # 均值骨长
         # 每32行是一帧，先不考虑五官
         bl = np.zeros([26, 1])
         frame_num = joints_ak.shape[0] / 32
@@ -115,7 +158,7 @@ class utils(object):
         return bld
 
     @classmethod
-    def distriDistance(cls, bu0: np, bu1: np, bld: float):# 骨长样本
+    def distriDistance(cls, bu0: np, bu1: np, bld: float):  # 骨长样本
         # bu都是(36,3),每个点对于相邻36个散点都有距离
         """
         :param bu0:
@@ -127,35 +170,38 @@ class utils(object):
               | distance ……
               | ……       ……
         """
-        bu0 = bu0[:,None,:]
-        bu1 = bu1[None,:,:]
-        b_distance_score = np.linalg.norm(bu0-bu1,axis=-1)
+        bu0 = bu0[:, None, :]
+        bu1 = bu1[None, :, :]
+        b_distance_score = np.linalg.norm(bu0 - bu1, axis=-1)
         # b_distance_score -= bld
         # if bld == 280.10292586429114:
         # return 1 - abs(b_distance_score) / sum(sum(abs(b_distance_score)))
-        return 1 - abs(b_distance_score-bld)/abs(b_distance_score - bld)**2/(36**2-1)
+        return 1 - abs(b_distance_score - bld) / abs(b_distance_score - bld) ** 2 / (36 ** 2 - 1)
 
     @classmethod
-    def threeAKs(cls, joint_ak_0: np, joint_ak_1: np, joint_ak_2: np, joint_set_bar: np):# 三点观察
-        joint_ak_0 = joint_ak_0[None,:,:]
-        joint_ak_1 = joint_ak_1[None,:,:]
-        joint_ak_2 = joint_ak_2[None,:,:]
-        js = np.linalg.norm((joint_set_bar-joint_ak_0),axis=-1)+np.linalg.norm((joint_set_bar-joint_ak_1),axis=-1)+np.linalg.norm((joint_set_bar-joint_ak_2),axis=-1)
+    def threeAKs(cls, joint_ak_0: np, joint_ak_1: np, joint_ak_2: np, joint_set_bar: np):  # 三点观察
+        joint_ak_0 = joint_ak_0[None, :, :]
+        joint_ak_1 = joint_ak_1[None, :, :]
+        joint_ak_2 = joint_ak_2[None, :, :]
+        js = np.linalg.norm((joint_set_bar - joint_ak_0), axis=-1) + np.linalg.norm((joint_set_bar - joint_ak_1),
+                                                                                    axis=-1) + np.linalg.norm(
+            (joint_set_bar - joint_ak_2), axis=-1)
         # js是所有样本
         # 样本数据标准化
         js_bar = np.mean(js)
-        std = np.var(js,ddof=1)
+        std = np.var(js, ddof=1)
         # return 1 - js / sum(sum(js))
-        return 1 - abs(js-js_bar)/std
+        return 1 - abs(js - js_bar) / std
+
     @classmethod
-    def dissimilation(cls, d:int, c:int,j1:np, j2:np):
+    def dissimilation(cls, d: int, c: int, j1: np, j2: np):
         x_times = np.random.random(32)
         y_times = np.random.random(32)
         z_times = np.random.random(32)
-        if d ==1:
-            if c ==1:
-                j1[:,0] *= x_times
-            elif c==2:
+        if d == 1:
+            if c == 1:
+                j1[:, 0] *= x_times
+            elif c == 2:
                 j1[:, 0] *= x_times
                 j1[:, 1] *= y_times
             else:
@@ -163,10 +209,10 @@ class utils(object):
                 j1[:, 1] *= y_times
                 j1[:, 2] *= z_times
         else:
-            if c ==1:
-                j1[:,0] *= x_times
-                j2[:,0] *= x_times
-            elif c==2:
+            if c == 1:
+                j1[:, 0] *= x_times
+                j2[:, 0] *= x_times
+            elif c == 2:
                 j1[:, 0] *= x_times
                 j1[:, 1] *= y_times
                 j2[:, 0] *= x_times
@@ -178,9 +224,10 @@ class utils(object):
                 j2[:, 0] *= x_times
                 j2[:, 1] *= y_times
                 j2[:, 2] *= z_times
-        return j1,j2
+        return j1, j2
+
     @classmethod
-    def bonesLengthMid(cls,joints_ak: np):# 中值骨长
+    def bonesLengthMid(cls, joints_ak: np):  # 中值骨长
         # 每32行是一帧，先不考虑五官
         frame_num = int(joints_ak.shape[0] / 32)
         bl = np.zeros([frame_num, 20, 1])
@@ -215,12 +262,13 @@ class utils(object):
             # bl_unit[25, 0] = np.linalg.norm(joints[15] - joints[16])
             bl[fn] = bl_unit
         return bl
+
     @classmethod
-    def dictAtMidValue(cls,bl0,bl1,bl2):
+    def dictAtMidValue(cls, bl0, bl1, bl2):
         bld = dict()
         rs = []
         for bj in range(bl0.shape[1]):
-            rs.append(np.median([bl0[:,bj,:],bl1[:,bj,:],bl2[:,bj,:]]))
+            rs.append(np.median([bl0[:, bj, :], bl1[:, bj, :], bl2[:, bj, :]]))
         bld['0-1'] = rs[0]
         bld['0-18'] = rs[1]
         bld['0-22'] = rs[2]
@@ -248,6 +296,30 @@ class utils(object):
         # bld['14-17'] = rs[24]
         # bld['15-16'] = rs[25]
         return bld
+
+    @classmethod
+    def triangleMeasure(cls, K0: np, K1: np, Rt1: np, K2: np, Rt2: np, joints_ak_0: np, joints_ak_1: np,
+                        joints_ak_2: np):
+        import cv2
+        P0 = K0 @ np.eye(4)[:3,:]
+        P1 = K1 @ Rt1[:3,:]
+        P2 = K2 @ Rt2[:3,:]
+        esti01 = cv2.triangulatePoints(P0, P1, joints_ak_0.T, joints_ak_1.T)
+        esti02 = cv2.triangulatePoints(P0, P2, joints_ak_0.T, joints_ak_2.T)
+        Pf = K1 @ np.eye(4)[:3,:]
+        Ps = K2 @ (Rt2 @ np.linalg.inv(Rt1))[:3,:]
+        esti12 = cv2.triangulatePoints(Pf, Ps, joints_ak_1.T, joints_ak_2.T)
+        print(esti01 / esti01[3, 0])
+        print(esti02 / esti02[3, 0])
+        print(esti12 / esti12[3, 0])
+        joint_measure = 0
+
+        return joint_measure
+    @classmethod
+    def udpposeApplication(cls,img:np):
+        # 加载模型，得到估计
+        rs = np.zeros([3,12,3])
+        return rs
 class DataProcess(object):
     def __init__(self, coor_path: str, img_pth: str, ak_id: int):
         self.joints = K4ABT_JOINT_NAMES
@@ -285,6 +357,11 @@ class DataProcess(object):
         t = np.array(cal_handle._handle.depth_camera_calibration.extrinsics.translation).reshape([3, 1])
         depT = np.hstack((r, t))
         np.savetxt(f'{intrisics_pth}/{ak_id}_dep_ex.txt', depT)
+        # 得到畸变参数
+        np.savetxt(f'{intrisics_pth}/{ak_id}_rgb_Ab.txt', np.array(
+            [[rgb_para_handle.k1, rgb_para_handle.k2, rgb_para_handle.p1, rgb_para_handle.p2, rgb_para_handle.k3,
+              rgb_para_handle.k4, rgb_para_handle.k5, rgb_para_handle.k6,
+              ]]))
         Device.close()
 
     @classmethod
@@ -404,6 +481,11 @@ class DataProcess(object):
         from dataStructure import belief_propagation, string2factor_graph, factor
         import open3d as o3d
         import cv2
+        # 动态变量加载
+        names = locals()
+        # 内参加载
+        for ak in range(3):
+            names['K%s' % ak] = np.loadtxt(f'./param/{ak}_rgb_in.txt')
         # todo 第一帧和非第一帧观察值不一样
         # 每一帧的观察值数量一样
         joints_ak_0 = np.loadtxt('./data/fw/data0.txt')
@@ -447,7 +529,7 @@ class DataProcess(object):
         bl2 = utils.bonesLengthMid(joints_ak_2)
         bld = utils.dictAtMidValue(bl0, bl1, bl2)
         # ak估计做观察值
-        for ff in range(0,100):
+        for ff in range(0, 100):
             joints_score = utils.threeAKs(joints_ak_0[ff * 32:(ff + 1) * 32], joints_ak_1[ff * 32:(ff + 1) * 32],
                                           joints_ak_2[ff * 32:(ff + 1) * 32],
                                           joint_bar_set[:, ff * 32:(ff + 1) * 32, :])
@@ -456,85 +538,102 @@ class DataProcess(object):
             # 0-1 0-18 0-22
             f0 = factor([K4ABT_JOINT_NAMES[0]], joints_score[:, 0])  # joint 36个状态
             f27 = factor([K4ABT_JOINT_NAMES[1]], joints_score[:, 1])
-            distance01 = utils.distriDistance(joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 0, :], joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 1, :],
+            distance01 = utils.distriDistance(joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 0, :],
+                                              joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 1, :],
                                               bld['0-1'])  # pairwise (36,36)个状态
             f1 = factor([K4ABT_JOINT_NAMES[0], K4ABT_JOINT_NAMES[1]], distance01)
 
             f44 = factor([K4ABT_JOINT_NAMES[18]], joints_score[:, 18])
-            distance018 = utils.distriDistance(joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 0, :], joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 18, :], bld['0-18'])
+            distance018 = utils.distriDistance(joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 0, :],
+                                               joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 18, :], bld['0-18'])
             f2 = factor([K4ABT_JOINT_NAMES[0], K4ABT_JOINT_NAMES[18]], distance018)
 
             f48 = factor([K4ABT_JOINT_NAMES[22]], joints_score[:, 22])
-            distance022 = utils.distriDistance(joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 0, :], joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 22, :], bld['0-22'])
+            distance022 = utils.distriDistance(joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 0, :],
+                                               joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 22, :], bld['0-22'])
             f3 = factor([K4ABT_JOINT_NAMES[0], K4ABT_JOINT_NAMES[22]], distance022)
 
             # 18-19
             f45 = factor([K4ABT_JOINT_NAMES[19]], joints_score[:, 19])
-            distance1819 = utils.distriDistance(joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 18, :], joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 19, :], bld['18-19'])
+            distance1819 = utils.distriDistance(joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 18, :],
+                                                joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 19, :], bld['18-19'])
             f4 = factor([K4ABT_JOINT_NAMES[18], K4ABT_JOINT_NAMES[19]], distance1819)
 
             # 19-20
             f46 = factor([K4ABT_JOINT_NAMES[20]], joints_score[:, 20])
-            distance1920 = utils.distriDistance(joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 19, :], joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 20, :], bld['19-20'])
+            distance1920 = utils.distriDistance(joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 19, :],
+                                                joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 20, :], bld['19-20'])
             f5 = factor([K4ABT_JOINT_NAMES[19], K4ABT_JOINT_NAMES[20]], distance1920)
 
             # 20-21
             f47 = factor([K4ABT_JOINT_NAMES[21]], joints_score[:, 21])
-            distance2021 = utils.distriDistance(joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 20, :], joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 21, :], bld['20-21'])
+            distance2021 = utils.distriDistance(joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 20, :],
+                                                joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 21, :], bld['20-21'])
             f6 = factor([K4ABT_JOINT_NAMES[20], K4ABT_JOINT_NAMES[21]], distance2021)
 
             # 22-23
             f48 = factor([K4ABT_JOINT_NAMES[22]], joints_score[:, 22])
             f49 = factor([K4ABT_JOINT_NAMES[23]], joints_score[:, 23])
-            distance2223 = utils.distriDistance(joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 22, :], joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 23, :], bld['22-23'])
+            distance2223 = utils.distriDistance(joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 22, :],
+                                                joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 23, :], bld['22-23'])
             f7 = factor([K4ABT_JOINT_NAMES[22], K4ABT_JOINT_NAMES[23]], distance2223)
 
             # 23-24
             f50 = factor([K4ABT_JOINT_NAMES[24]], joints_score[:, 24])
-            distance2324 = utils.distriDistance(joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 23, :], joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 24, :], bld['23-24'])
+            distance2324 = utils.distriDistance(joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 23, :],
+                                                joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 24, :], bld['23-24'])
             f8 = factor([K4ABT_JOINT_NAMES[24], K4ABT_JOINT_NAMES[23]], distance2324)
 
             # 24-25
             f51 = factor([K4ABT_JOINT_NAMES[25]], joints_score[:, 25])
-            distance2425 = utils.distriDistance(joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 24, :], joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 25, :], bld['24-25'])
+            distance2425 = utils.distriDistance(joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 24, :],
+                                                joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 25, :], bld['24-25'])
             f9 = factor([K4ABT_JOINT_NAMES[24], K4ABT_JOINT_NAMES[25]], distance2425)
 
             # 1-2
             f28 = factor([K4ABT_JOINT_NAMES[2]], joints_score[:, 2])
-            distance12 = utils.distriDistance(joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 1, :], joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 2, :], bld['1-2'])
+            distance12 = utils.distriDistance(joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 1, :],
+                                              joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 2, :], bld['1-2'])
             f10 = factor([K4ABT_JOINT_NAMES[2], K4ABT_JOINT_NAMES[1]], distance12)
 
             # 2-3 2-4 2-11
             f29 = factor([K4ABT_JOINT_NAMES[3]], joints_score[:, 3])
             f30 = factor([K4ABT_JOINT_NAMES[4]], joints_score[:, 4])
             f37 = factor([K4ABT_JOINT_NAMES[11]], joints_score[:, 11])
-            distance23 = utils.distriDistance(joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 2, :], joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 3, :], bld['2-3'])
+            distance23 = utils.distriDistance(joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 2, :],
+                                              joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 3, :], bld['2-3'])
             f11 = factor([K4ABT_JOINT_NAMES[2], K4ABT_JOINT_NAMES[3]], distance23)
 
-            distance24 = utils.distriDistance(joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 2, :], joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 4, :], bld['2-4'])
+            distance24 = utils.distriDistance(joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 2, :],
+                                              joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 4, :], bld['2-4'])
             f12 = factor([K4ABT_JOINT_NAMES[2], K4ABT_JOINT_NAMES[4]], distance24)
 
-            distance211 = utils.distriDistance(joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 2, :], joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 11, :], bld['2-11'])
+            distance211 = utils.distriDistance(joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 2, :],
+                                               joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 11, :], bld['2-11'])
             f13 = factor([K4ABT_JOINT_NAMES[2], K4ABT_JOINT_NAMES[11]], distance211)
 
             # 3-26
             f52 = factor([K4ABT_JOINT_NAMES[26]], joints_score[:, 26])
-            distance326 = utils.distriDistance(joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 3, :], joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 26, :], bld['3-26'])
+            distance326 = utils.distriDistance(joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 3, :],
+                                               joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 26, :], bld['3-26'])
             f14 = factor([K4ABT_JOINT_NAMES[3], K4ABT_JOINT_NAMES[26]], distance326)
 
             # 4-5
             f31 = factor([K4ABT_JOINT_NAMES[5]], joints_score[:, 5])
-            distance45 = utils.distriDistance(joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 4, :], joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 5, :], bld['4-5'])
+            distance45 = utils.distriDistance(joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 4, :],
+                                              joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 5, :], bld['4-5'])
             f15 = factor([K4ABT_JOINT_NAMES[5], K4ABT_JOINT_NAMES[4]], distance45)
 
             # 5-6
             f32 = factor([K4ABT_JOINT_NAMES[6]], joints_score[:, 6])
-            distance56 = utils.distriDistance(joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 5, :], joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 6, :], bld['5-6'])
+            distance56 = utils.distriDistance(joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 5, :],
+                                              joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 6, :], bld['5-6'])
             f16 = factor([K4ABT_JOINT_NAMES[5], K4ABT_JOINT_NAMES[6]], distance56)
 
             # 6-7
             f33 = factor([K4ABT_JOINT_NAMES[7]], joints_score[:, 7])
-            distance67 = utils.distriDistance(joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 6, :], joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 7, :], bld['6-7'])
+            distance67 = utils.distriDistance(joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 6, :],
+                                              joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 7, :], bld['6-7'])
             f17 = factor([K4ABT_JOINT_NAMES[6], K4ABT_JOINT_NAMES[7]], distance67)
 
             # 7-8 7-10
@@ -553,17 +652,20 @@ class DataProcess(object):
 
             # 11-12
             f38 = factor([K4ABT_JOINT_NAMES[12]], joints_score[:, 12])
-            distance1112 = utils.distriDistance(joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 11, :], joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 12, :], bld['11-12'])
+            distance1112 = utils.distriDistance(joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 11, :],
+                                                joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 12, :], bld['11-12'])
             f21 = factor([K4ABT_JOINT_NAMES[11], K4ABT_JOINT_NAMES[12]], distance1112)
 
             # 12-13
             f39 = factor([K4ABT_JOINT_NAMES[13]], joints_score[:, 13])
-            distance1213 = utils.distriDistance(joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 12, :], joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 13, :], bld['12-13'])
+            distance1213 = utils.distriDistance(joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 12, :],
+                                                joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 13, :], bld['12-13'])
             f22 = factor([K4ABT_JOINT_NAMES[12], K4ABT_JOINT_NAMES[13]], distance1213)
 
             # 13-14
             f40 = factor([K4ABT_JOINT_NAMES[14]], joints_score[:, 14])
-            distance1314 = utils.distriDistance(joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 13, :], joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 14, :], bld['13-14'])
+            distance1314 = utils.distriDistance(joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 13, :],
+                                                joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 14, :], bld['13-14'])
             f23 = factor([K4ABT_JOINT_NAMES[13], K4ABT_JOINT_NAMES[14]], distance1314)
 
             # 14-15 14-17
@@ -579,9 +681,9 @@ class DataProcess(object):
             # f42 = factor([K4ABT_JOINT_NAMES[16]], joints_score[:, 16])
             # distance1516 = utils.distriDistance(joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 15, :], joint_bar_set[:, ff * 32:(ff + 1) * 32, :][:, 16, :], bld['15-16'])
             # f26 = factor([K4ABT_JOINT_NAMES[16], K4ABT_JOINT_NAMES[15]], distance1516)
-            names = locals()
+
             for n in range(53):  # 动态变量名
-                if n in [18,19,20,34,35,36,24,25,26,41,42,43]:
+                if n in [18, 19, 20, 34, 35, 36, 24, 25, 26, 41, 42, 43]:
                     continue
                 mrf.change_factor_distribution(f'f{n}', names['f%s' % n])
             bp = belief_propagation(mrf)
@@ -595,99 +697,316 @@ class DataProcess(object):
                 idx = np.argmax(score_array)
                 answer.append(joint_bar_set[:, ff * 32:(ff + 1) * 32, :][idx, jidex, :])
             bpStep1 = np.array(answer)
-        print(time.time()-s)
-            # '''画图 start'''
-            # line = [[1, 0], [2, 1], [3, 2], [4, 2], [5, 4], [6, 5], [7, 6], [8, 7], [9, 8], [10, 7], [11, 2], [12, 11],
-            #         [13, 12], [14, 13], [15, 14], [16, 15], [17, 14], [18, 0], [19, 18], [20, 19], [21, 20], [22, 0],
-            #         [23, 22], [24, 23], [25, 24], [26, 3], [27, 26], [28, 26], [29, 26], [30, 26], [31, 26]]
-            # cl0 = [[1, 0, 0] for i in range(len(line))]
-            # cl1 = [[0, 1, 0] for j in range(len(line))]
-            # cl2 = [[0, 0, 1] for k in range(len(line))]
-            # cs0 = np.zeros([32, 3])
-            # cs0[:, 0] = 1  # red
-            # cs1 = np.zeros([32, 3])
-            # cs1[:, 1] = 1  # green
-            # cs2 = np.zeros([32, 3])
-            # cs2[:, 2] = 1  # blue
-            # line_bp = [[1, 0], [2, 1], [3, 2], [4, 2], [5, 4], [6, 5], [7, 6], [8, 2], [8, 9],
-            #                       [9, 10], [10, 11], [12, 0], [12, 13], [13, 14], [14, 15], [16, 0],
-            #                       [16, 17], [17, 18], [18, 19], [20, 3]]
-            # cl_bp = [[0, 0, 0] for l in range(len(line_bp))]
-            # test0_pcd = o3d.geometry.PointCloud()
-            # test0_pcd.points = o3d.utility.Vector3dVector(joints_ak_0[ff * 32:(ff + 1) * 32])  # 定义点云坐标位置
-            # test0_pcd.colors = o3d.utility.Vector3dVector(cs0)  # 定义点云的颜色
-            # test0_pcd.transform([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
-            # lines0_pcd = o3d.geometry.LineSet()
-            # lines0_pcd.lines = o3d.utility.Vector2iVector(line)
-            # lines0_pcd.colors = o3d.utility.Vector3dVector(cl0)  # 线条颜色
-            # lines0_pcd.points = o3d.utility.Vector3dVector(joints_ak_0[ff * 32:(ff + 1) * 32])
-            # lines0_pcd.transform([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
-            #
-            # test1_pcd = o3d.geometry.PointCloud()
-            # test1_pcd.points = o3d.utility.Vector3dVector(joints_ak_1[ff * 32:(ff + 1) * 32])  # 定义点云坐标位置
-            # test1_pcd.colors = o3d.utility.Vector3dVector(cs1)  # 定义点云的颜色
-            # test1_pcd.transform([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
-            # lines1_pcd = o3d.geometry.LineSet()
-            # lines1_pcd.lines = o3d.utility.Vector2iVector(line)
-            # lines1_pcd.colors = o3d.utility.Vector3dVector(cl1)  # 线条颜色
-            # lines1_pcd.points = o3d.utility.Vector3dVector(joints_ak_1[ff * 32:(ff + 1) * 32])
-            # lines1_pcd.transform([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
-            #
-            # test2_pcd = o3d.geometry.PointCloud()
-            # test2_pcd.points = o3d.utility.Vector3dVector(joints_ak_2[ff * 32:(ff + 1) * 32])  # 定义点云坐标位置
-            # test2_pcd.colors = o3d.utility.Vector3dVector(cs2)  # 定义点云的颜色
-            # test2_pcd.transform([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
-            # lines2_pcd = o3d.geometry.LineSet()
-            # lines2_pcd.lines = o3d.utility.Vector2iVector(line)
-            # lines2_pcd.colors = o3d.utility.Vector3dVector(cl2)  # 线条颜色
-            # lines2_pcd.points = o3d.utility.Vector3dVector(joints_ak_2[ff * 32:(ff + 1) * 32])
-            # lines2_pcd.transform([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
-            #
-            # bp_pcd = o3d.geometry.LineSet()
-            # bp_pcd.lines = o3d.utility.Vector2iVector(line_bp)
-            # bp_pcd.colors = o3d.utility.Vector3dVector(cl_bp)  # 线条颜色
-            # bp_pcd.points = o3d.utility.Vector3dVector(bpStep1)
-            # bpp_pcd = o3d.geometry.PointCloud()
-            # bpp_pcd.points = o3d.utility.Vector3dVector(bpStep1)
-            # bpp_pcd.colors = o3d.utility.Vector3dVector(cl_bp)
-            # bp_pcd.transform([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
-            # bpp_pcd.transform([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
-            # o3d.visualization.draw_geometries(
-            #     [bp_pcd, bpp_pcd, test0_pcd, lines0_pcd,test1_pcd, lines1_pcd,test2_pcd, lines2_pcd],
-            #     window_name=f"BP joints points {ff}")
-            # '''画图end 头没有画 '''
-            #
-            # bg = cv2.imread(f'./data/fw/image0/image{ff}.bmp')
-            # in_param = np.loadtxt('./param/0_rgb_in.txt')
-            # uv1 = np.dot(in_param, bpStep1.T) / bpStep1.T[2]
-            # for i in range(uv1.shape[1]):
-            #     u = int(uv1[0, i])
-            #     v = int(uv1[1, i])
-            #     cv2.circle(bg, (u, v), 2, (0, 255, 0))
-            # cv2.imshow(f'{ff}', bg)
-            # cv2.waitKey(0)
-def testnp():
-    s = time.time()
-    a = np.arange(300)
-    print(np.median(a),time.time()-s)
-    s = time.time()
-    a = np.arange(100)
-    b = np.arange(100)
-    c = np.arange(100)
-    print(np.median([a,b,c]),time.time()-s)
+        print(time.time() - s)
+        # '''画图 start'''
+        # line = [[1, 0], [2, 1], [3, 2], [4, 2], [5, 4], [6, 5], [7, 6], [8, 7], [9, 8], [10, 7], [11, 2], [12, 11],
+        #         [13, 12], [14, 13], [15, 14], [16, 15], [17, 14], [18, 0], [19, 18], [20, 19], [21, 20], [22, 0],
+        #         [23, 22], [24, 23], [25, 24], [26, 3], [27, 26], [28, 26], [29, 26], [30, 26], [31, 26]]
+        # cl0 = [[1, 0, 0] for i in range(len(line))]
+        # cl1 = [[0, 1, 0] for j in range(len(line))]
+        # cl2 = [[0, 0, 1] for k in range(len(line))]
+        # cs0 = np.zeros([32, 3])
+        # cs0[:, 0] = 1  # red
+        # cs1 = np.zeros([32, 3])
+        # cs1[:, 1] = 1  # green
+        # cs2 = np.zeros([32, 3])
+        # cs2[:, 2] = 1  # blue
+        # line_bp = [[1, 0], [2, 1], [3, 2], [4, 2], [5, 4], [6, 5], [7, 6], [8, 2], [8, 9],
+        #                       [9, 10], [10, 11], [12, 0], [12, 13], [13, 14], [14, 15], [16, 0],
+        #                       [16, 17], [17, 18], [18, 19], [20, 3]]
+        # cl_bp = [[0, 0, 0] for l in range(len(line_bp))]
+        # test0_pcd = o3d.geometry.PointCloud()
+        # test0_pcd.points = o3d.utility.Vector3dVector(joints_ak_0[ff * 32:(ff + 1) * 32])  # 定义点云坐标位置
+        # test0_pcd.colors = o3d.utility.Vector3dVector(cs0)  # 定义点云的颜色
+        # test0_pcd.transform([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
+        # lines0_pcd = o3d.geometry.LineSet()
+        # lines0_pcd.lines = o3d.utility.Vector2iVector(line)
+        # lines0_pcd.colors = o3d.utility.Vector3dVector(cl0)  # 线条颜色
+        # lines0_pcd.points = o3d.utility.Vector3dVector(joints_ak_0[ff * 32:(ff + 1) * 32])
+        # lines0_pcd.transform([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
+        #
+        # test1_pcd = o3d.geometry.PointCloud()
+        # test1_pcd.points = o3d.utility.Vector3dVector(joints_ak_1[ff * 32:(ff + 1) * 32])  # 定义点云坐标位置
+        # test1_pcd.colors = o3d.utility.Vector3dVector(cs1)  # 定义点云的颜色
+        # test1_pcd.transform([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
+        # lines1_pcd = o3d.geometry.LineSet()
+        # lines1_pcd.lines = o3d.utility.Vector2iVector(line)
+        # lines1_pcd.colors = o3d.utility.Vector3dVector(cl1)  # 线条颜色
+        # lines1_pcd.points = o3d.utility.Vector3dVector(joints_ak_1[ff * 32:(ff + 1) * 32])
+        # lines1_pcd.transform([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
+        #
+        # test2_pcd = o3d.geometry.PointCloud()
+        # test2_pcd.points = o3d.utility.Vector3dVector(joints_ak_2[ff * 32:(ff + 1) * 32])  # 定义点云坐标位置
+        # test2_pcd.colors = o3d.utility.Vector3dVector(cs2)  # 定义点云的颜色
+        # test2_pcd.transform([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
+        # lines2_pcd = o3d.geometry.LineSet()
+        # lines2_pcd.lines = o3d.utility.Vector2iVector(line)
+        # lines2_pcd.colors = o3d.utility.Vector3dVector(cl2)  # 线条颜色
+        # lines2_pcd.points = o3d.utility.Vector3dVector(joints_ak_2[ff * 32:(ff + 1) * 32])
+        # lines2_pcd.transform([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
+        #
+        # bp_pcd = o3d.geometry.LineSet()
+        # bp_pcd.lines = o3d.utility.Vector2iVector(line_bp)
+        # bp_pcd.colors = o3d.utility.Vector3dVector(cl_bp)  # 线条颜色
+        # bp_pcd.points = o3d.utility.Vector3dVector(bpStep1)
+        # bpp_pcd = o3d.geometry.PointCloud()
+        # bpp_pcd.points = o3d.utility.Vector3dVector(bpStep1)
+        # bpp_pcd.colors = o3d.utility.Vector3dVector(cl_bp)
+        # bp_pcd.transform([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
+        # bpp_pcd.transform([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
+        # o3d.visualization.draw_geometries(
+        #     [bp_pcd, bpp_pcd, test0_pcd, lines0_pcd,test1_pcd, lines1_pcd,test2_pcd, lines2_pcd],
+        #     window_name=f"BP joints points {ff}")
+        # '''画图end 头没有画 '''
+        #
+        # bg = cv2.imread(f'./data/fw/image0/image{ff}.bmp')
+        # in_param = np.loadtxt('./param/0_rgb_in.txt')
+        # uv1 = np.dot(in_param, bpStep1.T) / bpStep1.T[2]
+        # for i in range(uv1.shape[1]):
+        #     u = int(uv1[0, i])
+        #     v = int(uv1[1, i])
+        #     cv2.circle(bg, (u, v), 2, (0, 255, 0))
+        # cv2.imshow(f'{ff}', bg)
+        # cv2.waitKey(0)
+
+    @classmethod
+    def singleFrame(cls,T0,T1,T2, mrf,j0,j1,j2,affine_l,Rt10,Rt20):
+        from dataStructure import belief_propagation, factor
+        r = T0[:, :3]
+        t = T0[:, 3].reshape([1, 3])
+        j0 = np.dot(j0, r.T) + t  # 在ak0的rgb坐标系中了
+        r = T1[:, :3]
+        t = T1[:, 3].reshape([1, 3])
+        j1 = np.dot(j1, r.T) + t
+        j1 = utils.sub2MasterRT(j1,Rt10)
+        r = T2[:, :3]
+        t = T2[:, 3].reshape([1, 3])
+        j2 = np.dot(j2, r.T) + t
+        j2 = utils.sub2MasterRT(j2,Rt20)
+        dist_set = []
+        for lamda in affine_l:
+            for beta in affine_l[:9 - lamda]:
+                joint_bar = lamda * j0 / 10 + beta * j1 / 10 + (10 - lamda - beta) * j2 / 10
+                dist_set.append(joint_bar)
+        joint_bar_set = np.array(dist_set).reshape(-1, 32, 3)
+        bl0 = utils.bonesLengthMid(j0)
+        bl1 = utils.bonesLengthMid(j1)
+        bl2 = utils.bonesLengthMid(j2)
+        bld = utils.dictAtMidValue(bl0, bl1, bl2)
+        joints_score = utils.threeAKs(j0, j1, j2, joint_bar_set)
+        # 27个(36,36)的骨长关系也加上
+        # 0-1 0-18 0-22
+        f0 = factor([K4ABT_JOINT_NAMES[0]], joints_score[:, 0])  # joint 36个状态
+        f27 = factor([K4ABT_JOINT_NAMES[1]], joints_score[:, 1])
+        distance01 = utils.distriDistance(joint_bar_set[:, 0, :],
+                                          joint_bar_set[:, 1, :],
+                                          bld['0-1'])  # pairwise (36,36)个状态
+        f1 = factor([K4ABT_JOINT_NAMES[0], K4ABT_JOINT_NAMES[1]], distance01)
+
+        f44 = factor([K4ABT_JOINT_NAMES[18]], joints_score[:, 18])
+        distance018 = utils.distriDistance(joint_bar_set[:, 0, :],
+                                           joint_bar_set[:, 18, :], bld['0-18'])
+        f2 = factor([K4ABT_JOINT_NAMES[0], K4ABT_JOINT_NAMES[18]], distance018)
+
+        f48 = factor([K4ABT_JOINT_NAMES[22]], joints_score[:, 22])
+        distance022 = utils.distriDistance(joint_bar_set[:, 0, :],
+                                           joint_bar_set[:, 22, :], bld['0-22'])
+        f3 = factor([K4ABT_JOINT_NAMES[0], K4ABT_JOINT_NAMES[22]], distance022)
+
+        # 18-19
+        f45 = factor([K4ABT_JOINT_NAMES[19]], joints_score[:, 19])
+        distance1819 = utils.distriDistance(joint_bar_set[:, 18, :],
+                                            joint_bar_set[:, 19, :], bld['18-19'])
+        f4 = factor([K4ABT_JOINT_NAMES[18], K4ABT_JOINT_NAMES[19]], distance1819)
+
+        # 19-20
+        f46 = factor([K4ABT_JOINT_NAMES[20]], joints_score[:, 20])
+        distance1920 = utils.distriDistance(joint_bar_set[:, 19, :],
+                                            joint_bar_set[:, 20, :], bld['19-20'])
+        f5 = factor([K4ABT_JOINT_NAMES[19], K4ABT_JOINT_NAMES[20]], distance1920)
+
+        # 20-21
+        f47 = factor([K4ABT_JOINT_NAMES[21]], joints_score[:, 21])
+        distance2021 = utils.distriDistance(joint_bar_set[:, 20, :],
+                                            joint_bar_set[:, 21, :], bld['20-21'])
+        f6 = factor([K4ABT_JOINT_NAMES[20], K4ABT_JOINT_NAMES[21]], distance2021)
+
+        # 22-23
+        f48 = factor([K4ABT_JOINT_NAMES[22]], joints_score[:, 22])
+        f49 = factor([K4ABT_JOINT_NAMES[23]], joints_score[:, 23])
+        distance2223 = utils.distriDistance(joint_bar_set[:, 22, :],
+                                            joint_bar_set[:, 23, :], bld['22-23'])
+        f7 = factor([K4ABT_JOINT_NAMES[22], K4ABT_JOINT_NAMES[23]], distance2223)
+
+        # 23-24
+        f50 = factor([K4ABT_JOINT_NAMES[24]], joints_score[:, 24])
+        distance2324 = utils.distriDistance(joint_bar_set[:, 23, :],
+                                            joint_bar_set[:, 24, :], bld['23-24'])
+        f8 = factor([K4ABT_JOINT_NAMES[24], K4ABT_JOINT_NAMES[23]], distance2324)
+
+        # 24-25
+        f51 = factor([K4ABT_JOINT_NAMES[25]], joints_score[:, 25])
+        distance2425 = utils.distriDistance(joint_bar_set[:, 24, :],
+                                            joint_bar_set[:, 25, :], bld['24-25'])
+        f9 = factor([K4ABT_JOINT_NAMES[24], K4ABT_JOINT_NAMES[25]], distance2425)
+
+        # 1-2
+        f28 = factor([K4ABT_JOINT_NAMES[2]], joints_score[:, 2])
+        distance12 = utils.distriDistance(joint_bar_set[:, 1, :],
+                                          joint_bar_set[:, 2, :], bld['1-2'])
+        f10 = factor([K4ABT_JOINT_NAMES[2], K4ABT_JOINT_NAMES[1]], distance12)
+
+        # 2-3 2-4 2-11
+        f29 = factor([K4ABT_JOINT_NAMES[3]], joints_score[:, 3])
+        f30 = factor([K4ABT_JOINT_NAMES[4]], joints_score[:, 4])
+        f37 = factor([K4ABT_JOINT_NAMES[11]], joints_score[:, 11])
+        distance23 = utils.distriDistance(joint_bar_set[:, 2, :],
+                                          joint_bar_set[:, 3, :], bld['2-3'])
+        f11 = factor([K4ABT_JOINT_NAMES[2], K4ABT_JOINT_NAMES[3]], distance23)
+
+        distance24 = utils.distriDistance(joint_bar_set[:, 2, :],
+                                          joint_bar_set[:, 4, :], bld['2-4'])
+        f12 = factor([K4ABT_JOINT_NAMES[2], K4ABT_JOINT_NAMES[4]], distance24)
+
+        distance211 = utils.distriDistance(joint_bar_set[:, 2, :],
+                                           joint_bar_set[:, 11, :], bld['2-11'])
+        f13 = factor([K4ABT_JOINT_NAMES[2], K4ABT_JOINT_NAMES[11]], distance211)
+
+        # 3-26
+        f52 = factor([K4ABT_JOINT_NAMES[26]], joints_score[:, 26])
+        distance326 = utils.distriDistance(joint_bar_set[:, 3, :],
+                                           joint_bar_set[:, 26, :], bld['3-26'])
+        f14 = factor([K4ABT_JOINT_NAMES[3], K4ABT_JOINT_NAMES[26]], distance326)
+
+        # 4-5
+        f31 = factor([K4ABT_JOINT_NAMES[5]], joints_score[:, 5])
+        distance45 = utils.distriDistance(joint_bar_set[:, 4, :],
+                                          joint_bar_set[:, 5, :], bld['4-5'])
+        f15 = factor([K4ABT_JOINT_NAMES[5], K4ABT_JOINT_NAMES[4]], distance45)
+
+        # 5-6
+        f32 = factor([K4ABT_JOINT_NAMES[6]], joints_score[:, 6])
+        distance56 = utils.distriDistance(joint_bar_set[:, 5, :],
+                                          joint_bar_set[:, 6, :], bld['5-6'])
+        f16 = factor([K4ABT_JOINT_NAMES[5], K4ABT_JOINT_NAMES[6]], distance56)
+
+        # 6-7
+        f33 = factor([K4ABT_JOINT_NAMES[7]], joints_score[:, 7])
+        distance67 = utils.distriDistance(joint_bar_set[:, 6, :],
+                                          joint_bar_set[:, 7, :], bld['6-7'])
+        f17 = factor([K4ABT_JOINT_NAMES[6], K4ABT_JOINT_NAMES[7]], distance67)
+        # 11-12
+        f38 = factor([K4ABT_JOINT_NAMES[12]], joints_score[:, 12])
+        distance1112 = utils.distriDistance(joint_bar_set[:, 11, :],
+                                            joint_bar_set[:, 12, :], bld['11-12'])
+        f21 = factor([K4ABT_JOINT_NAMES[11], K4ABT_JOINT_NAMES[12]], distance1112)
+
+        # 12-13
+        f39 = factor([K4ABT_JOINT_NAMES[13]], joints_score[:, 13])
+        distance1213 = utils.distriDistance(joint_bar_set[:, 12, :],
+                                            joint_bar_set[:, 13, :], bld['12-13'])
+        f22 = factor([K4ABT_JOINT_NAMES[12], K4ABT_JOINT_NAMES[13]], distance1213)
+
+        # 13-14
+        f40 = factor([K4ABT_JOINT_NAMES[14]], joints_score[:, 14])
+        distance1314 = utils.distriDistance(joint_bar_set[:, 13, :],
+                                            joint_bar_set[:, 14, :], bld['13-14'])
+        f23 = factor([K4ABT_JOINT_NAMES[13], K4ABT_JOINT_NAMES[14]], distance1314)
+
+        names = locals()
+        for n in range(53):  # 动态变量名
+            if n in [18, 19, 20, 34, 35, 36, 24, 25, 26, 41, 42, 43]:
+                continue
+            mrf.change_factor_distribution(f'f{n}', names['f%s' % n])
+        bp = belief_propagation(mrf)
+        answer = []
+        for jidex, j in enumerate(K4ABT_JOINT_NAMES):
+            if j in ["nose", "left eye", "left ear",
+                     "right eye", "right ear", "left hand", "left handtip", "left thumb", "right hand",
+                     "right handtip", "right thumb"]:
+                continue
+            score_array = bp.belief(j).get_distribution()
+            idx = np.argmax(score_array)
+            answer.append(joint_bar_set[idx, jidex, :])
+        bpStep1 = np.array(answer)
+        return bpStep1
+def testtriangle():
+    K0 = np.loadtxt('./param/0_rgb_in.txt')
+    K1 = np.loadtxt('./param/1_rgb_in.txt')
+    K2 = np.loadtxt('./param/2_rgb_in.txt')
+    Ex0 = np.loadtxt('./param/0_rgb_ex.txt')
+    Ex1 = np.loadtxt('./param/1_rgb_ex.txt')
+    Ex2 = np.loadtxt('./param/2_rgb_ex.txt')
+    rgbRt10 = np.loadtxt('./param/1_0_abt_Rt.txt')
+    rgbRt10 = np.vstack([rgbRt10,[0,0,0,1]])
+    rgbRt20 = np.loadtxt('./param/2_0_abt_Rt.txt')
+    rgbRt20 = np.vstack([rgbRt20,[0,0,0,1]])
+    j0 = np.loadtxt('./data/fw/data0.txt')[60]
+    j1 = np.loadtxt('./data/fw/data1.txt')[60]
+    j2 = np.loadtxt('./data/fw/data2.txt')[60]
+    # jx 都要先转换到rgb坐标系
+    j0 = Ex0[:,:3] @ j0.T + Ex0[:,3]
+    j1 = Ex1[:,:3] @ j1.T + Ex1[:,3]
+    j2 = Ex2[:,:3] @ j2.T + Ex2[:,3]
+    print(j0,j1)
+    # 现有的Rt都是从到主，三角测量里要主到从
+    Rt1 = np.linalg.inv(rgbRt10)
+    Rt2 = np.linalg.inv(rgbRt20)
+    j0 = j0 / j0[2]
+    j1 = j1 / j1[2]
+    j2 = j2 / j2[2]
+    xy0 = K0 @ j0.T
+    xy1 = K1 @ j1.T
+    xy2 = K2 @ j2.T
+    utils.triangleMeasure(K0, K1, Rt1, K2, Rt2, xy0[:2], xy1[:2], xy2[:2])
+
+def ttest():
+    ret = [(np.array([[9.72115918e-01, 1.03684900e-02, -2.34271501e-01,
+              3.53349699e+02],
+             [-1.19491510e-02, 9.99914408e-01, -5.32867806e-03,
+              -2.83237786e+01],
+             [2.34196199e-01, 7.97943831e-03, 9.72156607e-01,
+              1.79038016e+02],
+             [0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+              1.00000000e+00]]), np.array([[9.72115918e-01, -1.19491510e-02, 2.34196199e-01,
+                                         -3.85765335e+02],
+                                        [1.03684900e-02, 9.99914408e-01, 7.97943831e-03,
+                                         2.32290287e+01],
+                                        [-2.34271501e-01, -5.32867806e-03, 9.72156607e-01,
+                                         -9.14241544e+01],
+                                        [0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                                         1.00000000e+00]]), 1.7890848932153396, 1.789084893215324, 0.5019060828765788,
+      0.513964049723286), (np.array([[9.61987143e-01, 1.21701702e-02, 2.72823431e-01,
+                                   -4.12741693e+02],
+                                  [-9.82947612e-03, 9.99902237e-01, -9.94471318e-03,
+                                   -3.39878051e+01],
+                                  [-2.72917788e-01, 6.88497482e-03, 9.62012723e-01,
+                                   8.54717854e+01],
+                                  [0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                                   1.00000000e+00]]), np.array([[9.61987143e-01, -9.82947612e-03, -2.72917788e-01,
+                                                              4.20044890e+02],
+                                                             [1.21701702e-02, 9.99902237e-01, 6.88497482e-03,
+                                                              3.84191479e+01],
+                                                             [2.72823431e-01, -9.94471318e-03, 9.62012723e-01,
+                                                              3.00426606e+01],
+                                                             [0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
+                                                              1.00000000e+00]]), 1.525638985068282, 1.5256389850682814,
+                           0.4265706493613119, 0.42764102264683973)]
+
+    print(ret[1][0])
 if __name__ == '__main__':
     # 验证一下ak的人体追踪 √
     # DataSelect.record()
     # 得到内参 √
-    # DataProcess.getAKintrisics(0,'param')
+    # DataProcess.getAKintrisics(2,'param')
+    # 3ak标定
+    # utils.calculateRTandSave()
     # 验证一下data经过rt，然后画到对应的rgb上
     # DataProcess.verfyJointsData(1, 50)
     # 验证λ和β的效果
     # DataProcess.jointsIn3D_interpolation()
     # BP测速
-    DataProcess.BPapplication()
-    # 验证BP使用
-    # DataProcess.verifyBP(90)
+    # DataProcess.BPapplication()
     # 测试numpy
-    # testnp()
+    # ttest()
     pass
