@@ -26,7 +26,7 @@ class utils(object):
         from flyingRT import compute_relative_rt
         mf = MulDeviceSynCapture(0,[1,2])
         rgb0,rgb1,rgb2 = [],[],[]
-        for i in trange(100):
+        for i in trange(300):
             ret = mf.get()
             rgb0.append(ret[0][1])
             rgb1.append(ret[1][1])
@@ -64,9 +64,6 @@ class utils(object):
         rgbrt20 = ret[1][0]
         np.savetxt('./param/1_0_abt_Rt.txt',rgbrt10)
         np.savetxt('./param/2_0_abt_Rt.txt',rgbrt20)
-        # 读取单个ak的外参
-        # dep→rgb→rgb转换
-        # 存储，下面的函数读取计算用
         pass
 
     @classmethod
@@ -1000,7 +997,7 @@ if __name__ == '__main__':
     # 得到内参 √
     # DataProcess.getAKintrisics(2,'param')
     # 3ak标定
-    # utils.calculateRTandSave()
+    utils.calculateRTandSave()
     # 验证一下data经过rt，然后画到对应的rgb上
     # DataProcess.verfyJointsData(1, 50)
     # 验证λ和β的效果
