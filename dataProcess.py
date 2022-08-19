@@ -18,15 +18,15 @@ class utils(object):
         pass
 
     @classmethod
-    def calculateRTandSave(cls):  # 关节点估计是在depth坐标系下，从相机需要进行两次rt计算
+    def calculateRTandSave(cls,cap_num:str):  # 关节点估计是在depth坐标系下，从相机需要进行两次rt计算
         # 同步相机拍摄标定
         from ak.camera_synchronous.core_threading import MulDeviceSynCapture
         import cv2
         from tqdm import trange
         from flyingRT import compute_relative_rt
-        mf = MulDeviceSynCapture(0,[1,2])
         rgb0,rgb1,rgb2 = [],[],[]
-        for i in trange(300):
+        mf = MulDeviceSynCapture(0,[1,2])
+        for i in trange(cap_num):
             ret = mf.get()
             rgb0.append(ret[0][1])
             rgb1.append(ret[1][1])
@@ -292,6 +292,7 @@ class utils(object):
         # bld['14-15'] = rs[23]
         # bld['14-17'] = rs[24]
         # bld['15-16'] = rs[25]
+        print('wrist length:',rs[16],rs[19])
         return bld
 
     @classmethod
@@ -997,7 +998,7 @@ if __name__ == '__main__':
     # 得到内参 √
     # DataProcess.getAKintrisics(2,'param')
     # 3ak标定
-    utils.calculateRTandSave()
+    utils.calculateRTandSave(300)
     # 验证一下data经过rt，然后画到对应的rgb上
     # DataProcess.verfyJointsData(1, 50)
     # 验证λ和β的效果
