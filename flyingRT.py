@@ -152,64 +152,92 @@ def compute_relative_rt(image_dir_list: List[Tuple[str, str, str, str]], image_s
         cam_d[image_dir] = mtx
         T_list_d[image_dir] = T_list
         cam_p3d_list_d[image_dir] = cam_p3d_list
+
+    # 测试
+    test_p2d_list_d = {}
+    test_cam_p3d_list_d = {}
+    unique_image_dir_list = set(chain(*[l[2:] if len(l) > 2 else l[:2] for l in image_dir_list]))
+    d_print('test 识别角点')
+    for image_dir in unique_image_dir_list:
+        if image_dir in p2d_list_d:
+            test_p2d_list_d[image_dir] = p2d_list_d[image_dir]
+            test_cam_p3d_list_d[image_dir] = cam_p3d_list_d[image_dir]
+            continue
+
+        p2d_list = []
+        for image_path in tqdm(sorted(os.listdir(image_dir)), desc=f"识别 {os.path.basename(image_dir)} 内棋盘格",
+                               leave=False):
+            image_path = os.path.join(image_dir, image_path)
+            if not os.path.isfile(image_path):
+                continue
+            gray = cv.imread(image_path, cv.IMREAD_GRAYSCALE)
+            assert gray.shape == (H, W)
+            ret, corners = cv.findChessboardCornersSB(gray, (x_num, y_num), None)
+            if not ret:
+                p2d_list.append(None)
+                continue
+            p2d_list.append(corners)
+        test_p2d_list_d[image_dir] = p2d_list
+        test_cam_p3d_list_d[image_dir] = cam_p3d_list
+
     ret_list = []
     # 计算相对RT
     d_print(f'计算相对RT')
     for t in image_dir_list:
-        image0_dir, image1_dir = t
-        # if len(t) == 2:
-        #     image0_dir, image1_dir = t
-        #     test_image0_dir, test_image1_dir = t
-        # else:
-        #     image0_dir, image1_dir, test_image0_dir, test_image1_dir = t
-        cam0 = cam_d[image0_dir]
-        cam1 = cam_d[image1_dir]
-        dist0 = dist_d[image0_dir]
-        dist1 = dist_d[image1_dir]
-        d_print(f'计算 {os.path.basename(image0_dir)} 和 {os.path.basename(image1_dir)} 的相对RT')
-        T_list = np.stack([T1 @ np.linalg.inv(T0) for T0, T1 in zip(T_list_d[image0_dir], T_list_d[image1_dir]) if
-                           T0 is not None and T1 is not None], axis=0)
-        T = np.eye(4)
-        T[:3, -1] = T_list[:, :3, -1].mean(axis=0)
-        T[:3, :3] = rotation_matrixs_mean(T_list[:, :3, :3])
-        T[-1, -1] = 1
-        T_inv = np.linalg.inv(T)
-        # 计算误差
-        error0_1_3d_list = []
-        error1_0_3d_list = []
-        error0_1_2d_list = []
-        error1_0_2d_list = []
-        for c03d, c13d, p2d0, p2d1 in tqdm(
-                zip(cam_p3d_list_d[image0_dir], cam_p3d_list_d[image1_dir], p2d_list_d[image0_dir],
-                    p2d_list_d[image1_dir]), desc=f'计算误差 {os.path.basename(image0_dir)} {os.path.basename(image1_dir)}',
-                leave=False):
-            if c03d is None or c13d is None or p2d0 is None or p2d1 is None:
-                continue
-            cam03d_cam13d = (T[:3, :3] @ c03d.T + T[:3, -1:]).T  # n x 3 0相机3d->1相机3d
-            cam13d_cam03d = (T_inv[:3, :3] @ c13d.T + T_inv[:3, -1:]).T  # n x 3 1相机3d->0相机3d
-            cam13d_cam03d_cam02d, _ = cv.projectPoints(cam13d_cam03d, np.eye(3), np.zeros(3), cam0,
-                                                       dist0)  # 1相机3d->0相机3d->0相机2d
-            cam03d_cam13d_cam12d, _ = cv.projectPoints(cam03d_cam13d, np.eye(3), np.zeros(3), cam1,
-                                                       dist1)  # 0相机3d->1相机3d->1相机2d
-            error0_1_3d = np.linalg.norm(cam03d_cam13d - c13d, axis=1).mean()
-            error1_0_3d = np.linalg.norm(cam13d_cam03d - c03d, axis=1).mean()
-            error0_1_2d = np.linalg.norm(cam03d_cam13d_cam12d - p2d1, axis=2).mean()
-            error1_0_2d = np.linalg.norm(cam13d_cam03d_cam02d - p2d0, axis=2).mean()
-            error0_1_3d_list.append(error0_1_3d)
-            error1_0_3d_list.append(error1_0_3d)
-            error0_1_2d_list.append(error0_1_2d)
-            error1_0_2d_list.append(error1_0_2d)
-        error0_1_3d_avg = sum(error0_1_3d_list) / len(error0_1_3d_list)
-        error1_0_3d_avg = sum(error1_0_3d_list) / len(error1_0_3d_list)
-        error0_1_2d_avg = sum(error0_1_2d_list) / len(error0_1_2d_list)
-        error1_0_2d_avg = sum(error1_0_2d_list) / len(error1_0_2d_list)
-        ret_list.append(
-            (
-                T, T_inv, error0_1_3d_avg, error1_0_3d_avg, error0_1_2d_avg, error1_0_2d_avg
-            )
+        if len(t) == 2:
+            image0_dir, image1_dir = t
+        test_image0_dir, test_image1_dir = t
+    else:
+        image0_dir, image1_dir, test_image0_dir, test_image1_dir = t
+    cam0 = cam_d[image0_dir]
+    cam1 = cam_d[image1_dir]
+    dist0 = dist_d[image0_dir]
+    dist1 = dist_d[image1_dir]
+    d_print(f'计算 {os.path.basename(image0_dir)} 和 {os.path.basename(image1_dir)} 的相对RT')
+    T_list = np.stack([T1 @ np.linalg.inv(T0) for T0, T1 in zip(T_list_d[image0_dir], T_list_d[image1_dir]) if
+                       T0 is not None and T1 is not None], axis=0)
+    T = np.eye(4)
+    T[:3, -1] = T_list[:, :3, -1].mean(axis=0)
+    T[:3, :3] = rotation_matrixs_mean(T_list[:, :3, :3])
+    T[-1, -1] = 1
+    T_inv = np.linalg.inv(T)
+    # 计算误差
+    error0_1_3d_list = []
+    error1_0_3d_list = []
+    error0_1_2d_list = []
+    error1_0_2d_list = []
+    for c03d, c13d, p2d0, p2d1 in tqdm(zip(test_cam_p3d_list_d[test_image0_dir], test_cam_p3d_list_d[test_image1_dir],
+                                           test_p2d_list_d[test_image0_dir], test_p2d_list_d[test_image1_dir]),
+                                       desc=f'计算误差 {os.path.basename(image0_dir)} {os.path.basename(image1_dir)}',
+                                       leave=False):
+        if c03d is None or c13d is None or p2d0 is None or p2d1 is None:
+            continue
+        cam03d_cam13d = (T[:3, :3] @ c03d.T + T[:3, -1:]).T  # n x 3 0相机3d->1相机3d
+        cam13d_cam03d = (T_inv[:3, :3] @ c13d.T + T_inv[:3, -1:]).T  # n x 3 1相机3d->0相机3d
+        cam13d_cam03d_cam02d, _ = cv.projectPoints(cam13d_cam03d, np.eye(3), np.zeros(3), cam0,
+                                                   dist0)  # 1相机3d->0相机3d->0相机2d
+        cam03d_cam13d_cam12d, _ = cv.projectPoints(cam03d_cam13d, np.eye(3), np.zeros(3), cam1,
+                                                   dist1)  # 0相机3d->1相机3d->1相机2d
+        error0_1_3d = np.linalg.norm(cam03d_cam13d - c13d, axis=1).mean()
+        error1_0_3d = np.linalg.norm(cam13d_cam03d - c03d, axis=1).mean()
+        error0_1_2d = np.linalg.norm(cam03d_cam13d_cam12d - p2d1, axis=2).mean()
+        error1_0_2d = np.linalg.norm(cam13d_cam03d_cam02d - p2d0, axis=2).mean()
+        error0_1_3d_list.append(error0_1_3d)
+        error1_0_3d_list.append(error1_0_3d)
+        error0_1_2d_list.append(error0_1_2d)
+        error1_0_2d_list.append(error1_0_2d)
+    error0_1_3d_avg = sum(error0_1_3d_list) / len(error0_1_3d_list)
+    error1_0_3d_avg = sum(error1_0_3d_list) / len(error1_0_3d_list)
+    error0_1_2d_avg = sum(error0_1_2d_list) / len(error0_1_2d_list)
+    error1_0_2d_avg = sum(error1_0_2d_list) / len(error1_0_2d_list)
+    ret_list.append(
+        (
+            T, T_inv, error0_1_3d_avg, error1_0_3d_avg, error0_1_2d_avg, error1_0_2d_avg
         )
-    return ret_list
+    )
 
+
+    return ret_list
 
 if __name__ == '__main__':
     from pprint import pprint
