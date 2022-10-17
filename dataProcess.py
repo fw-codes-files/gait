@@ -12,8 +12,14 @@ sub1 = 1
 sub2 = 2
 import numpy as np
 import pykinect_azure as pykinect
+import logging
+from dataStructure import belief_propagation, factor
+logging.basicConfig(format='%(asctime)s - %(filename)s[line:%(lineno)d] - %(levelname)s: %(message)s',
+                    level=logging.INFO, filename='dev.log', filemode='a')
 
 class utils(object):
+    delta = np.array([[0,0,1]]) # transformed normal plane data has margin
+    filtration = [0, 1, 2, 3, 4, 8, 15, 19, 20] # joints index in ak estimation but not in UDP-pose
     def __init__(self):
         pass
 
@@ -26,12 +32,24 @@ class utils(object):
         from flyingRT import compute_relative_rt
         rgb0,rgb1,rgb2 = [],[],[]
         mf = MulDeviceSynCapture(0,[1,2])
+        cv2.namedWindow("master", 0);
+        cv2.resizeWindow("master", 640, 360);
+        cv2.namedWindow("sub1", 0);
+        cv2.resizeWindow("sub1", 640, 360);
+        cv2.namedWindow("sub2", 0);
+        cv2.resizeWindow("sub2", 640, 360);
         for i in trange(cap_num):
             ret = mf.get()
+            cv2.imshow('master',ret[0][1])
+            cv2.imshow('sub1',ret[1][1])
+            cv2.imshow('sub2',ret[2][1])
             rgb0.append(ret[0][1])
             rgb1.append(ret[1][1])
             rgb2.append(ret[2][1])
+            time.sleep(0.02)
+            cv2.waitKey(1)
         mf.close()
+        cv2.destroyAllWindows()
         for j in trange(len(rgb0)):
             cv2.imwrite(f'./data/rt/master/{j}.jpg',rgb0[j])
             cv2.imwrite(f'./data/rt/sub1/{j}.jpg',rgb1[j])
@@ -292,7 +310,34 @@ class utils(object):
         # bld['14-15'] = rs[23]
         # bld['14-17'] = rs[24]
         # bld['15-16'] = rs[25]
-        print('wrist length:',rs[16],rs[19])
+        return bld
+
+    @classmethod
+    def dictMidValueWithMultiAK(cls,bl_t):
+        bld = dict()
+        rs = []
+        for bj in range(bl_t.shape[1]):
+            rs.append(np.median(bl_t[:,bj,:]))
+        bld['0-1'] = rs[0]
+        bld['0-18'] = rs[1]
+        bld['0-22'] = rs[2]
+        bld['1-2'] = rs[3]
+        bld['2-3'] = rs[4]
+        bld['2-4'] = rs[5]
+        bld['2-11'] = rs[6]
+        bld['3-26'] = rs[7]
+        bld['18-19'] = rs[8]
+        bld['19-20'] = rs[9]
+        bld['20-21'] = rs[10]
+        bld['22-23'] = rs[11]
+        bld['23-24'] = rs[12]
+        bld['24-25'] = rs[13]
+        bld['4-5'] = rs[14]
+        bld['5-6'] = rs[15]
+        bld['6-7'] = rs[16]
+        bld['11-12'] = rs[17]
+        bld['12-13'] = rs[18]
+        bld['13-14'] = rs[19]
         return bld
 
     @classmethod
@@ -313,12 +358,92 @@ class utils(object):
         joint_measure = 0
 
         return joint_measure
+
     @classmethod
-    def udpposeApplication(cls,img:np):
-        # 加载模型，得到估计
-        rs = np.zeros([3,12,3])
-        return rs
+    def recurisive(cls, ak_num, affine_table, rs, rs_lst, tem_lst):
+        '''
+        variable ak number causes variable affine algorithm coefficients
+        :param ak_num:
+        :param affine_table:
+        :param rs:
+        :param rs_lst:
+        :param tem_lst:
+        :return:
+        '''
+        if ak_num > 0:  # 不退出
+            for x in range(affine_table.shape[1]):
+                rs += affine_table[ak_num][x]
+                tem_lst.append(affine_table[ak_num][x])
+                utils.recurisive(ak_num - 1, affine_table, rs, rs_lst, tem_lst)
+                rs -= affine_table[ak_num][x]
+                tem_lst.pop(-1)
+        else:  # 最后一层
+            for x in range(affine_table.shape[1]):
+                rs += affine_table[ak_num][x]
+                tem_lst.append(affine_table[ak_num][x])
+                if rs == 10:
+                    rs_lst.append(tem_lst.copy())
+                else:
+                    rs -= affine_table[ak_num][x]
+                tem_lst.pop(-1)
+
+    @classmethod
+    def gaussia(cls, delta):
+        return 1 / np.sqrt(2 * np.pi) * np.exp((-1 / 2) * np.square(delta))
+
+    @classmethod
+    def UniScoreOfMultiAK(cls,J:np, alterJ:np):
+        '''
+        variable AK number implement of utils.threeAKs()
+        :param J: estimation of joints (ak number, 21 ,3)
+        :param alterJ: (prossibilities, 21, 3)
+        :return: BP unitary score
+        '''
+        J = J[:,None,:,:]
+        alterJ = alterJ[None,:,:,:]
+        mean = np.mean(np.linalg.norm(J - alterJ,axis=-1),axis=1)[:,None,:] # (ak number, prossibilities, joints)
+        std = np.var(np.linalg.norm(J - alterJ,axis=-1),axis=1)[:,None,:]
+        return np.sum(cls.gaussia((np.linalg.norm(J - alterJ, axis=-1) - mean)/std),axis=0)/J.shape[0]
+
+    @classmethod
+    def LineScoreOfMultiAK(cls, UDP:np, K:np, Rt:np, alterJ:np, Cxy:np):
+        '''
+        transform udp-pose 2D estimation into 3D lines, thus, distance from alternatives to lines can be references
+        :param UDP: (ak number, 12, 2)
+        :param K: (ak number, 4, 4)
+        :param Rt: (ak number, 4, 4)
+        :param alterJ: (possibilities, 21, 3)
+        :return:BP unitary score
+        '''
+        udp_3d = np.ones((UDP.shape[0],UDP.shape[1],3)) # (ak number, 12, 3)
+        udp_3d[:, :, :2] = UDP
+        udp_3d = udp_3d.transpose([0, 2, 1]) # (ak number, 3, 12)
+
+        normal_plane = cls.sub2MasterRT((K@udp_3d).T, Rt) # should be (ak number, 12, 3)
+        origin = cls.sub2MasterRT((K[1:]@Cxy).T,Rt[1:]) - cls.delta # major ak no need this, offsets from ak internal params
+
+        normal_plane[1:] -= origin
+        intersection_joints = np.delete(alterJ,cls.filtration, axis=1) # joints both in alterJ and in udppose
+
+        # helen formula to obtain the distance from alterJ to UDP extension lines
+        a = np.linalg.norm(normal_plane, axis=2)[None,:,:] # (ak number, 12)
+        b = np.linalg.norm(intersection_joints, axis=2)[:,None,:] # (possibilities, 12)
+        c = np.linalg.norm(intersection_joints[:,None,:,:] - normal_plane[None,:,:], axis=2) # (possibilities, ak number, 12)
+        p = (a + b + c) / 2
+        s = np.sqrt(p * (p-a) * (p-b) * (p-c))
+        h = 2 * s / a # should be (possibilities, ak number, 12)
+
+        h_mean = np.mean(h,axis=0)[None,:,:] # (1, ak number, 12)
+        h_var = np.var(h,axis=0)[None,:,:]
+
+        return np.sum(cls.gaussia((h - h_mean)/h_var),axis=1)/UDP.shape[0] # score, thus, eliminate dim ak number
+
 class DataProcess(object):
+    joints_weight = 0.5
+    lines_weight = 0.5
+    vaiable_lst = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 21, 22, 23, 27, 28, 29, 30, 31, 32, 33,
+                   37, 38, 39, 40, 44, 45, 46, 47, 48, 49, 50, 51, 52]
+    
     def __init__(self, coor_path: str, img_pth: str, ak_id: int):
         self.joints = K4ABT_JOINT_NAMES
         self.joints_coor = np.loadtxt(coor_path)
@@ -769,7 +894,7 @@ class DataProcess(object):
 
     @classmethod
     def singleFrame(cls,T0,T1,T2, mrf,j0,j1,j2,affine_l,Rt10,Rt20):
-        from dataStructure import belief_propagation, factor
+
         r = T0[:, :3]
         t = T0[:, 3].reshape([1, 3])
         j0 = np.dot(j0, r.T) + t  # 在ak0的rgb坐标系中了
@@ -928,6 +1053,153 @@ class DataProcess(object):
             answer.append(joint_bar_set[idx, jidex, :])
         bpStep1 = np.array(answer)
         return bpStep1
+
+    @classmethod
+    def singleFrameWithVariAK(cls, UDP:np, K:np, T:np,mrf,J:np,Rt:np, Cxy:np, affline_np:np, bld:dict,first_frame:bool = False, last_frame:np = np.zeros((1,1))):
+        '''
+        :param UDP: estimation from UDP-pose. (ak number, 12, 2)
+        :param K: inverse internal params of ak. (ak number, 3, 3)
+        :param T: RT from depth coordinate to rgb coordinate per ak in a np. (ak number, 4, 4)
+        :param mrf: factor graph data structure
+        :param J: joints' xyz estimation from a ak in a np. (ak number, 21, 3)
+        :param Cxy: ak offset params. (ak number, 1, 3) first matrix is special for alignment
+        :param Rt: calibration of all of aks in a np. (ak number, 4, 4) first matrix is special for alignment
+        :param affline_np: a pool of affine algorithm，it's dynamic. shape: (possibility, coefficient, 1) to spread
+        :param bld: estimation of bones length from ak. (20, 1)
+        :return: BP estimation of per frame (ak number, 21, 3)
+        '''
+        # verification
+        length = len(T)
+        if length != len(J) or (length) != len(Rt):
+            logging.warning(f'params ERROR where T length is {length}, J length is {len(J)} and Rt length is {len(Rt)}!\t So this frame is skipped!')
+        if first_frame and last_frame.shape[0] != 0:
+            logging.warning(f'params ERROR where first_frame and last_frame conflicts')
+            return
+        if first_frame:
+            if len(affline_np) + len(J) != 11:
+                logging.error(f"first frame:params ERROR affline_l and J's length is unmatched. J length is {len(J)}")
+                return
+        else:
+            if len(affline_np) + len(J) != 10:
+                logging.error(f"other frames:params ERROR affline_l, J and last frame length is unmatched. J length is {len(J)}")
+                return
+
+        # all joints are transformed to the major ak rgb coordinate
+        for a in range(length):
+            J[a] = utils.sub2MasterRT(J[a], T[a])
+            J[a] = utils.sub2MasterRT(J[a], Rt[a])
+        if not first_frame:
+            J = np.concatenate((J,last_frame.reshape(1,21,3)),axis=0)
+
+        # dynamically get alternative coordinates(first frame or not) ex.alternativesJ[i,:,:] means a possibility of total joints distribution;alternativesJ[:,j,:] means a joints' total possibility distribution
+        alternativesJ = np.sum(affline_np * J, axis=1).reshape((-1,21,3)) # (prossibilities, coefficient, 1) * (ak number, 21joints) → (alternatives, joints, coordinates)
+
+        # unitary score in BP:①ak estimation②upd-pose③last frame
+        J_uni_score = utils.UniScoreOfMultiAK(J, alternativesJ) # ①③ (prossibilities, joints)
+        J_line_socre = utils.LineScoreOfMultiAK(UDP, K, Rt, alternativesJ) # ②
+
+        # set factors distibution. A clumsy way of coding
+        # 0-1 0-18 0-22
+        f0 = factor([K4ABT_JOINT_NAMES[0]], J_uni_score[:, 0])  # joint
+        f27 = factor([K4ABT_JOINT_NAMES[1]], J_uni_score[:, 1])
+        distance01 = utils.distriDistance(alternativesJ[:, 0, :], alternativesJ[:, 1, :], bld['0-1'])  # pairwise (36,36)个状态
+        f1 = factor([K4ABT_JOINT_NAMES[0], K4ABT_JOINT_NAMES[1]], distance01)
+
+        f44 = factor([K4ABT_JOINT_NAMES[18]], J_uni_score[:, 18] * cls.joints_weight + J_line_socre[:, 6] * cls.lines_weight)
+        distance018 = utils.distriDistance(alternativesJ[:, 0, :], alternativesJ[:, 18, :], bld['0-18'])
+        f2 = factor([K4ABT_JOINT_NAMES[0], K4ABT_JOINT_NAMES[18]], distance018)
+
+        f48 = factor([K4ABT_JOINT_NAMES[22]], J_uni_score[:, 22] * cls.joints_weight + J_line_socre[:, 7] * cls.lines_weight)
+        distance022 = utils.distriDistance(alternativesJ[:, 0, :], alternativesJ[:, 22, :], bld['0-22'])
+        f3 = factor([K4ABT_JOINT_NAMES[0], K4ABT_JOINT_NAMES[22]], distance022)
+        # 18-19
+        f45 = factor([K4ABT_JOINT_NAMES[19]], J_uni_score[:, 19] * cls.joints_weight + J_line_socre[:, 8] * cls.lines_weight)
+        distance1819 = utils.distriDistance(alternativesJ[:, 18, :], alternativesJ[:, 19, :], bld['18-19'])
+        f4 = factor([K4ABT_JOINT_NAMES[18], K4ABT_JOINT_NAMES[19]], distance1819)
+        # 19-20
+        f46 = factor([K4ABT_JOINT_NAMES[20]], J_uni_score[:, 20] * cls.joints_weight + J_line_socre[:, 10] * cls.lines_weight)
+        distance1920 = utils.distriDistance(alternativesJ[:, 19, :], alternativesJ[:, 20, :], bld['19-20'])
+        f5 = factor([K4ABT_JOINT_NAMES[19], K4ABT_JOINT_NAMES[20]], distance1920)
+        # 20-21
+        f47 = factor([K4ABT_JOINT_NAMES[21]], J_uni_score[:, 21])
+        distance2021 = utils.distriDistance(alternativesJ[:, 20, :], alternativesJ[:, 21, :], bld['20-21'])
+        f6 = factor([K4ABT_JOINT_NAMES[20], K4ABT_JOINT_NAMES[21]], distance2021)
+        # 22-23
+        f49 = factor([K4ABT_JOINT_NAMES[23]], J_uni_score[:, 23] * cls.joints_weight + J_line_socre[:, 9] * cls.lines_weight)
+        distance2223 = utils.distriDistance(alternativesJ[:, 22, :], alternativesJ[:, 23, :], bld['22-23'])
+        f7 = factor([K4ABT_JOINT_NAMES[22], K4ABT_JOINT_NAMES[23]], distance2223)
+        # 23-24
+        f50 = factor([K4ABT_JOINT_NAMES[24]], J_uni_score[:, 24] * cls.joints_weight + J_line_socre[:, 11] * cls.lines_weight)
+        distance2324 = utils.distriDistance(alternativesJ[:, 23, :], alternativesJ[:, 24, :], bld['23-24'])
+        f8 = factor([K4ABT_JOINT_NAMES[24], K4ABT_JOINT_NAMES[23]], distance2324)
+        # 24-25
+        f51 = factor([K4ABT_JOINT_NAMES[25]], J_uni_score[:, 25])
+        distance2425 = utils.distriDistance(alternativesJ[:, 24, :], alternativesJ[:, 25, :], bld['24-25'])
+        f9 = factor([K4ABT_JOINT_NAMES[24], K4ABT_JOINT_NAMES[25]], distance2425)
+        # 1-2
+        f28 = factor([K4ABT_JOINT_NAMES[2]], J_uni_score[:, 2])
+        distance12 = utils.distriDistance(alternativesJ[:, 1, :], alternativesJ[:, 2, :], bld['1-2'])
+        f10 = factor([K4ABT_JOINT_NAMES[2], K4ABT_JOINT_NAMES[1]], distance12)
+        # 2-3 2-4 2-11
+        f29 = factor([K4ABT_JOINT_NAMES[3]], J_uni_score[:, 3])
+        f30 = factor([K4ABT_JOINT_NAMES[4]], J_uni_score[:, 4])
+        f37 = factor([K4ABT_JOINT_NAMES[11]], J_uni_score[:, 11])
+        distance23 = utils.distriDistance(alternativesJ[:, 2, :], alternativesJ[:, 3, :], bld['2-3'])
+        f11 = factor([K4ABT_JOINT_NAMES[2], K4ABT_JOINT_NAMES[3]], distance23)
+
+        distance24 = utils.distriDistance(alternativesJ[:, 2, :], alternativesJ[:, 4, :], bld['2-4'])
+        f12 = factor([K4ABT_JOINT_NAMES[2], K4ABT_JOINT_NAMES[4]], distance24)
+
+        distance211 = utils.distriDistance(alternativesJ[:, 2, :], alternativesJ[:, 11, :], bld['2-11'])
+        f13 = factor([K4ABT_JOINT_NAMES[2], K4ABT_JOINT_NAMES[11]], distance211)
+        # 3-26
+        f52 = factor([K4ABT_JOINT_NAMES[26]], J_uni_score[:, 26])
+        distance326 = utils.distriDistance(alternativesJ[:, 3, :], alternativesJ[:, 26, :], bld['3-26'])
+        f14 = factor([K4ABT_JOINT_NAMES[3], K4ABT_JOINT_NAMES[26]], distance326)
+        # 4-5
+        f31 = factor([K4ABT_JOINT_NAMES[5]], J_uni_score[:, 5] * cls.joints_weight + J_line_socre[:, 0] * cls.lines_weight)
+        distance45 = utils.distriDistance(alternativesJ[:, 4, :], alternativesJ[:, 5, :], bld['4-5'])
+        f15 = factor([K4ABT_JOINT_NAMES[5], K4ABT_JOINT_NAMES[4]], distance45)
+        # 5-6
+        f32 = factor([K4ABT_JOINT_NAMES[6]], J_uni_score[:, 6] * cls.joints_weight + J_line_socre[:, 2] * cls.lines_weight)
+        distance56 = utils.distriDistance(alternativesJ[:, 5, :], alternativesJ[:, 6, :], bld['5-6'])
+        f16 = factor([K4ABT_JOINT_NAMES[5], K4ABT_JOINT_NAMES[6]], distance56)
+        # 6-7
+        f33 = factor([K4ABT_JOINT_NAMES[7]], J_uni_score[:, 7] * cls.joints_weight + J_line_socre[:, 4] * cls.lines_weight)
+        distance67 = utils.distriDistance(alternativesJ[:, 6, :], alternativesJ[:, 7, :], bld['6-7'])
+        f17 = factor([K4ABT_JOINT_NAMES[6], K4ABT_JOINT_NAMES[7]], distance67)
+        # 11-12
+        f38 = factor([K4ABT_JOINT_NAMES[12]], J_uni_score[:, 12] * cls.joints_weight + J_line_socre[:, 1] * cls.lines_weight)
+        distance1112 = utils.distriDistance(alternativesJ[:, 11, :], alternativesJ[:, 12, :], bld['11-12'])
+        f21 = factor([K4ABT_JOINT_NAMES[11], K4ABT_JOINT_NAMES[12]], distance1112)
+        # 12-13
+        f39 = factor([K4ABT_JOINT_NAMES[13]], J_uni_score[:, 13] * cls.joints_weight + J_line_socre[:, 3] * cls.lines_weight)
+        distance1213 = utils.distriDistance(alternativesJ[:, 12, :], alternativesJ[:, 13, :], bld['12-13'])
+        f22 = factor([K4ABT_JOINT_NAMES[12], K4ABT_JOINT_NAMES[13]], distance1213)
+        # 13-14
+        f40 = factor([K4ABT_JOINT_NAMES[14]], J_uni_score[:, 14] * cls.joints_weight + J_line_socre[:, 5] * cls.lines_weight)
+        distance1314 = utils.distriDistance(alternativesJ[:, 13, :], alternativesJ[:, 14, :], bld['13-14'])
+        f23 = factor([K4ABT_JOINT_NAMES[13], K4ABT_JOINT_NAMES[14]], distance1314)
+
+        # set value
+        if first_frame:
+            first_frame = False
+
+        factors = locals()
+        for n in cls.vaiable_lst:
+            mrf.change_factor_distribution(f'f{n}', factors['f%s' % n])
+        bp = belief_propagation(mrf)
+        answer = []
+        for jidex, j in enumerate(K4ABT_JOINT_NAMES):
+            if j in ["nose", "left eye", "left ear",
+                     "right eye", "right ear", "left hand", "left handtip", "left thumb", "right hand",
+                     "right handtip", "right thumb"]:
+                continue
+            score_array = bp.belief(j).get_distribution()
+            idx = np.argmax(score_array)
+            answer.append(alternativesJ[idx, jidex, :])
+        bpStep1 = np.array(answer)
+        return first_frame, bpStep1
 def testtriangle():
     K0 = np.loadtxt('./param/0_rgb_in.txt')
     K1 = np.loadtxt('./param/1_rgb_in.txt')
@@ -998,7 +1270,7 @@ if __name__ == '__main__':
     # 得到内参 √
     # DataProcess.getAKintrisics(2,'param')
     # 3ak标定
-    utils.calculateRTandSave(300)
+    # utils.calculateRTandSave(200)
     # 验证一下data经过rt，然后画到对应的rgb上
     # DataProcess.verfyJointsData(1, 50)
     # 验证λ和β的效果

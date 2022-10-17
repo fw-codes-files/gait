@@ -171,7 +171,7 @@ def compute_relative_rt(image_dir_list: List[Tuple[str, str, str, str]], image_s
     d_print(f'计算相对RT')
     for t in image_dir_list:
         if len(t) == 2:
-        image0_dir, image1_dir = t
+            image0_dir, image1_dir = t
             test_image0_dir, test_image1_dir = t
         else:
             image0_dir, image1_dir, test_image0_dir, test_image1_dir = t
@@ -210,11 +210,7 @@ def compute_relative_rt(image_dir_list: List[Tuple[str, str, str, str]], image_s
         error1_0_3d_avg = sum(error1_0_3d_list) / len(error1_0_3d_list)
         error0_1_2d_avg = sum(error0_1_2d_list) / len(error0_1_2d_list)
         error1_0_2d_avg = sum(error1_0_2d_list) / len(error1_0_2d_list)
-        ret_list.append(
-            (
-                T, T_inv, error0_1_3d_avg, error1_0_3d_avg, error0_1_2d_avg, error1_0_2d_avg
-            )
-        )
+        ret_list.append((T, T_inv, error0_1_3d_avg, error1_0_3d_avg, error0_1_2d_avg, error1_0_2d_avg))
     return ret_list
 
 if __name__ == '__main__':

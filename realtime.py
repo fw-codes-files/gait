@@ -46,7 +46,7 @@ class Realtime(object):
         Rt20 = np.loadtxt('./param/2_0_abt_Rt.txt')
         key = 0
         lines = []
-        # jl = []
+        jl = []
         while key & 0xFF != 27:
             s = time.time()
             ret = mc.get()
@@ -61,6 +61,7 @@ class Realtime(object):
                     j2[i] = np.array(
                         [ret[2][3].joints[i].position.x, ret[2][3].joints[i].position.y,
                          ret[2][3].joints[i].position.z])
+                # todo add affine_l division
                 bpj = DataProcess.singleFrame(T['0'], T['1'], T['2'], mrf, j0, j1, j2, [1, 2, 3, 4, 5, 6, 7, 8], Rt10,
                                               Rt20)
                 # midFilter.append(bpj)
@@ -96,10 +97,10 @@ class Realtime(object):
                 cv2.line(ret[0][1], lines[17], lines[18], (0, 255, 0), 3)
                 cv2.line(ret[0][1], lines[18], lines[19], (0, 255, 0), 3)
                 cv2.line(ret[0][1], lines[3], lines[20], (0, 255, 0), 3)
-                # jl.append([j0.copy()])
-                # jl.append([j1.copy()])
-                # jl.append([j2.copy()])
-                # jl.append([bpj])
+                jl.append([j0.copy()])
+                jl.append([j1.copy()])
+                jl.append([j2.copy()])
+                jl.append([bpj])
             else:
                 pass
             cv2.imshow('master', ret[0][4])
@@ -110,10 +111,10 @@ class Realtime(object):
             lines.clear()
         mc.close()
         cv2.destroyAllWindows()
-        # jw = np.array(jl)
-        # np.savetxt('./data/zsjrt.txt', jw,delimiter=' ' ,fmt = '%s')
+        jw = np.array(jl)
+        np.savetxt('./data/zsjrt.txt', jw,delimiter=' ' ,fmt = '%s')
 
-def draw():
+def draw(start):
     import numpy as np
     import open3d as o3d
     '''加载数据'''
@@ -150,7 +151,7 @@ def draw():
     '''加载参数，三个dep到rgb的rt和两个rgb到rgb的rt，加载完毕'''
 
     affine_l = [1, 2, 3, 4, 5, 6, 7, 8]
-    for f in range(608,joints.shape[0]):
+    for f in range(start,joints.shape[0]):
         '''所有的点都放到主相机rgb空间'''
         ak0 = joints[f,:32,:]
         ak1 = joints[f,32:64,:]
@@ -219,3 +220,4 @@ def draw():
             window_name=f"BP joints points {f}")
 if __name__ == '__main__':
     Realtime.start()
+    # draw(50)

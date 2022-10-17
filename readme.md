@@ -1,16 +1,26 @@
-Human posture estimation project
+# Human posture estimation project
 
-citations:
-
-Ⅰ.authors:
-
-    - given-names: Ibai
-
-    - family-names: Gorordo Fernandez
-
-    - orcid: 'https://orcid.org/0000-0003-3219-1879'
-
-
+### citations:
+```
+ @software{Gorordo_Fernandez_pyKinectAzure,
+    author = {Gorordo Fernandez, Ibai},
+    title = {{pyKinectAzure}}
+    }
+ @InProceedings{Huang_2020_CVPR,
+    author = {Huang, Junjie and Zhu, Zheng and Guo, Feng and Huang, Guan},
+    title = {The Devil Is in the Details: Delving Into Unbiased Data Processing for Human Pose Estimation},
+    booktitle = {The IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)},
+    month = {June},
+    year = {2020}
+    }
+ @article{huang2020aid,
+    title={AID: Pushing the Performance Boundary of Human Pose Estimation with Information Dropping Augmentation,
+    author={Huang, Junjie and Zhu, Zheng and Huang, Guan and Du, Dalong},
+    journal={arXiv preprint arXiv:2008.07139},
+    year={2020}
+    }
+```
+### instructions:
 1. This task use multiple azure kinects(abbreviated AK) to estimate human posture with its own SDK.
 2. AKs’ estimations are as observation for Belief Propagation(abbreviated BP).
 3. Using UDP-Pose's estimations to get more observation for BP.
