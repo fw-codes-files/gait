@@ -186,9 +186,10 @@ def compute_relative_rt(image_dir_list: List[Tuple[str, str, str, str]], image_s
     for t in image_dir_list:
         if len(t) == 2:
             image0_dir, image1_dir = t
-        test_image0_dir, test_image1_dir = t
-    else:
-        image0_dir, image1_dir, test_image0_dir, test_image1_dir = t
+            test_image0_dir, test_image1_dir = t
+        else:
+            image0_dir, image1_dir, test_image0_dir, test_image1_dir = t
+        print(t)
     cam0 = cam_d[image0_dir]
     cam1 = cam_d[image1_dir]
     dist0 = dist_d[image0_dir]

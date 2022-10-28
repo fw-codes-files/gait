@@ -27,3 +27,13 @@
 4. Realtime(in realtime.py) and offline(in dataProcess.py [def BPapplication]) mode are available.
 5. Not all defs are used, some defs was used for testing datas or something else.
 6. To be replenished.
+
+### How to use
+data process:</p>
+1.run DataProcess.getAKintrisics() function get intrisics of AK.</p>
+2.run utils.calculateRTandSave() function get RT among AK. Chessboard is needed.</p>
+3.run RealtimeVariAK.esitBoneLength() function get bone length of a participant.</p>
+4.run RealtimeVariAK.start() function to obtain BP estimation.</p>
+
+### flaws must be fixed
+utils.LineScoreOfMultiAK() needs torch 1.12.x which has class FasterRCNN_ResNet50_FPN_Weights. It's correctness needs to be verified.
