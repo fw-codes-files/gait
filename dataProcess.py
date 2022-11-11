@@ -1114,8 +1114,8 @@ class DataProcess(object):
         s = time.time()
         J_uni_score = utils.UniScoreOfMultiAK(J, alternativesJ) # ①③ (prossibilities, joints)
         logging.info(f'unitary score consumes f{time.time() - s}')
-        # J_line_socre = utils.LineScoreOfMultiAK(UDP, K, Rt, alternativesJ,Cxy) # ②
-        J_line_socre = np.zeros_like(J_uni_score)
+        J_line_socre = utils.LineScoreOfMultiAK(UDP, K, Rt, alternativesJ,Cxy) # ②
+        # J_line_socre = np.zeros_like(J_uni_score)
 
         # set factors distibution. A clumsy way of coding
         # 0-1 0-18 0-22

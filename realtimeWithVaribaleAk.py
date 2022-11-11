@@ -89,7 +89,7 @@ class RealtimeVariAK(object):
         from dataProcess import DataProcess, utils
         from dataStructure import string2factor_graph
         import numpy as np
-        # from udpProcess import udpPose
+        from udpProcess import UDP_pose
         import json
         import cv2
         # start AK
@@ -122,7 +122,7 @@ class RealtimeVariAK(object):
         rs_lst = []
         tem_lst = []
         utils.recurisive(ak_numbers - 1, affine_table, 0, rs_lst, tem_lst)
-        affine_np = np.array(rs_lst)
+        affine_np = np.array(rs_lst) / 10
 
         affine_table_n = np.tile(np.arange(1, 11 - ak_numbers), (ak_numbers+1, 1))
         rs_lst_n = []
@@ -155,16 +155,16 @@ class RealtimeVariAK(object):
                     detect = True
                     continue
 
-                # UDP = udpPose(img) # should be asynchronous
+                UDP = UDP_pose().udpPose(img) # should be asynchronous
                 for akn in range(ak_numbers):
                     for idx,i in enumerate([0, 1, 2, 3, 4, 5, 6, 7, 11, 12, 13, 14, 18, 19, 20, 21, 22, 23, 24, 25, 26]):
                         J[akn][idx] = np.array([ret[akn][3].joints[i].position.x, ret[akn][3].joints[i].position.y,
                                               ret[akn][3].joints[i].position.z])
 
                 if first_frame:
-                    ret = DataProcess.singleFrameWithVariAK(np.eye(1), K, T, mrf, J, Rt, Cxy, affine_np, bld, first_frame, initial)
+                    ret = DataProcess.singleFrameWithVariAK(UDP, K, T, mrf, J, Rt, Cxy, affine_np, bld, first_frame, initial)
                 else:
-                    ret = DataProcess.singleFrameWithVariAK(np.eye(1), K, T, mrf, J, Rt, Cxy, affine_np_n, bld, first_frame, last_bp)
+                    ret = DataProcess.singleFrameWithVariAK(UDP, K, T, mrf, J, Rt, Cxy, affine_np_n, bld, first_frame, last_bp)
                 last_bp = ret.copy()
                 if first_frame//3 ==0:
                     save_lst.append(ret)
