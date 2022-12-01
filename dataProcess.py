@@ -1228,7 +1228,7 @@ class DataProcess(object):
             jidex += 1
         logging.info(f'get_distribution consumes {time.time() - s}')
         bp_esti = np.array(answer)
-        return bp_esti
+        return bp_esti,first_frame
 def testtriangle():
     K0 = np.loadtxt('./param/0_rgb_in.txt')
     K1 = np.loadtxt('./param/1_rgb_in.txt')

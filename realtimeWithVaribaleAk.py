@@ -162,9 +162,9 @@ class RealtimeVariAK(object):
                                               ret[akn][3].joints[i].position.z])
 
                 if first_frame:
-                    ret = DataProcess.singleFrameWithVariAK(UDP, K, T, mrf, J, Rt, Cxy, affine_np, bld, first_frame, initial)
+                    ret, first_frame = DataProcess.singleFrameWithVariAK(UDP, K, T, mrf, J, Rt, Cxy, affine_np, bld, first_frame, initial)
                 else:
-                    ret = DataProcess.singleFrameWithVariAK(UDP, K, T, mrf, J, Rt, Cxy, affine_np_n, bld, first_frame, last_bp)
+                    ret, first_frame = DataProcess.singleFrameWithVariAK(UDP, K, T, mrf, J, Rt, Cxy, affine_np_n, bld, first_frame, last_bp)
                 last_bp = ret.copy()
                 if first_frame//3 ==0:
                     save_lst.append(ret)
