@@ -1092,13 +1092,14 @@ class DataProcess(object):
             logging.warning(f'params ERROR where first_frame and last_frame conflicts')
             return
         if first_frame:
-            if len(affline_np) + len(J) != 11:
+            if affline_np.shape[1] != len(J):
                 logging.error(f"first frame:params ERROR affline_l and J's length is unmatched. J length is {len(J)}")
                 return
         else:
-            if len(affline_np) + len(J) != 10:
+            if affline_np.shape[1] != len(J) + 1:
                 logging.error(f"other frames:params ERROR affline_l, J and last frame length is unmatched. J length is {len(J)}")
                 return
+            # pass # when frame is not 1st frame, len(J) add 1, but affline_np add a new dimension
 
         # all joints are transformed to the major ak rgb coordinate
         for a in range(length):
